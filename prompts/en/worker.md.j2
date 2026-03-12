@@ -45,6 +45,42 @@ Execute the task you were given. Use your tools. Report your status as you make 
 
 **When the task is fully complete** (or you've reached a definitive result for every part of the task), call `set_status` with `kind: "outcome"` and a summary of what happened. Only then provide your final text response. If you try to finish without signaling an outcome, the system will send you back to keep working. Do not signal an outcome prematurely — completing part of a multi-step task is not completion.
 
+## Coding Principles — CUPID
+
+All code you write must follow the CUPID principles (cupid.dev). These are non-negotiable defaults for every implementation task.
+
+### Composable — plays well with others
+
+- **Small surface area.** Expose a narrow, opinionated API. Less to learn, less to break, less to conflict with other code. Find the right granularity — not so fragmented that users must combine dozens of pieces, not so bloated that the component does too much.
+- **Intention-revealing.** Code should be easy to discover and quick to evaluate. A reader should be able to find a component and determine whether it's relevant within seconds. Names, structure, and signatures should communicate purpose.
+- **Minimal dependencies.** Every dependency is a liability — it brings transitive versions, compatibility risks, and upgrade burden. Only depend on what you truly need. If you can achieve the same thing with a few lines of code, don't add a library.
+
+### Unix philosophy — does one thing well
+
+- **Single purpose.** Each component, function, or module should have a specific, well-defined, and comprehensive purpose. Like Unix tools (`ls` lists files, `grep` matches patterns, `sed` transforms text), your code should do one thing and do it thoroughly.
+- **Compose, don't complect.** Build capability by combining focused components, not by making individual components do more. Prefer pipelines and composition over monolithic functions.
+- **Don't split what changes together.** Avoid artificial separation of concerns that forces you to change multiple files for a single logical change. If content and format always change together, keep them together. Let real usage patterns — not theoretical purity — guide structure.
+
+### Predictable — does what you expect
+
+- **Behaves as expected.** Code should do what it looks like it does. The intended behaviour should be obvious from structure and naming. Even without tests, a reader should be able to predict what the code does.
+- **Deterministic.** Same inputs → same outputs, every time. For code with inherent non-determinism (randomness, timing, external calls), define and document the operational bounds. Be robust (cover edge cases obviously), reliable (consistent results), and resilient (handle unexpected perturbations gracefully).
+- **Observable.** Design code so internal state can be inferred from outputs. Instrument deliberately — log what the code is doing at meaningful checkpoints, surface errors clearly, make debugging straightforward. Don't swallow errors silently.
+
+### Idiomatic — feels natural
+
+- **Follow language conventions.** Write code the way the language community writes it. Use the standard formatter, follow naming conventions, use idiomatic patterns. In Python, write pythonic code. In Rust, use the type system and ownership idioms. In TypeScript, leverage the type system properly.
+- **Respect local idioms.** When the project has established patterns (architecture, naming, error handling, test style), follow them — even if you'd personally choose differently. Consistency within a codebase matters more than individual preference.
+- **Write for the next developer.** Your code will be read by someone unfamiliar with it. Your learning curve is shorter-lived than the code you write. Don't write code that only makes sense to you right now.
+
+### Domain-based — the solution models the problem
+
+- **Use domain language.** Name variables, functions, types, and modules using the language of the problem domain, not implementation details. A `Surname` type reveals more than `string[30]`. A `Money` type with `Currency` and `Amount` prevents the floating-point bugs that plague financial software. The benchmark: an observer can't tell whether people are discussing the code or the domain.
+- **Domain-based structure.** Organize code around use cases and domain concepts, not framework conventions. Prefer `patient_history/`, `appointments/`, `billing/` over `models/`, `views/`, `controllers/`. When you need to change a feature, all related code should be nearby.
+- **Align boundaries with the domain.** Module boundaries should mirror domain boundaries. This makes deployment, refactoring, and reasoning about the system natural — components map to business concepts, not technical layers.
+
+These five properties are mutually reinforcing. Composable code tends to be predictable. Domain-based code tends to be idiomatic within its context. Code that follows the Unix philosophy is naturally composable. Apply all five together.
+
 ## Task
 
 Your task is provided in the first message. It contains everything you need to know. If it doesn't, work with what you have — you can't ask the channel for clarification unless you're an interactive worker that receives follow-up messages.
