@@ -20,6 +20,7 @@ mod models;
 mod opencode_proxy;
 mod projects;
 mod providers;
+mod registry;
 mod secrets;
 mod server;
 mod settings;

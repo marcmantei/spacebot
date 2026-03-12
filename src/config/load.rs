@@ -15,7 +15,7 @@ use super::{
     CoalesceConfig, CompactionConfig, Config, CortexConfig, CronDef, DefaultsConfig, DiscordConfig,
     DiscordInstanceConfig, EmailConfig, EmailInstanceConfig, GroupDef, HumanDef, IngestionConfig,
     LinkDef, LlmConfig, McpServerConfig, McpTransport, MemoryPersistenceConfig, MessagingConfig,
-    MetricsConfig, OpenCodeConfig, ProjectsConfig, ProviderConfig, SignalConfig,
+    MetricsConfig, OpenCodeConfig, ProjectsConfig, ProviderConfig, RegistryConfig, SignalConfig,
     SignalInstanceConfig, SlackCommandConfig, SlackConfig, SlackInstanceConfig, TelegramConfig,
     TelegramInstanceConfig, TelemetryConfig, TwitchConfig, TwitchInstanceConfig, WarmupConfig,
     WebhookConfig, normalize_adapter, validate_named_messaging_adapters,
@@ -1610,6 +1610,28 @@ impl Config {
                     }
                 })
                 .unwrap_or_else(|| base_defaults.projects.clone()),
+            registry: toml
+                .defaults
+                .registry
+                .map(|r| {
+                    let base = &base_defaults.registry;
+                    RegistryConfig {
+                        enabled: r.enabled.unwrap_or(base.enabled),
+                        github_owners: r.github_owners.unwrap_or_else(|| base.github_owners.clone()),
+                        clone_base_dir: r
+                            .clone_base_dir
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_else(|| base.clone_base_dir.clone()),
+                        sync_interval_secs: r
+                            .sync_interval_secs
+                            .unwrap_or(base.sync_interval_secs),
+                        auto_clone: r.auto_clone.unwrap_or(base.auto_clone),
+                        exclude_patterns: r
+                            .exclude_patterns
+                            .unwrap_or_else(|| base.exclude_patterns.clone()),
+                    }
+                })
+                .unwrap_or_else(|| base_defaults.registry.clone()),
         };
 
         let mut agents: Vec<AgentConfig> = toml
