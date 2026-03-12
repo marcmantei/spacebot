@@ -389,13 +389,16 @@ pub async fn add_channel_tools(
             .cloned()
             .unwrap_or_else(|| state.deps.agent_id.to_string());
         handle
-            .add_tool(SendMessageTool::new(
-                messaging_manager.clone(),
-                state.channel_store.clone(),
-                state.conversation_logger.clone(),
-                send_message_display_name,
-                current_adapter.clone(),
-            ))
+            .add_tool(
+                SendMessageTool::new(
+                    messaging_manager.clone(),
+                    state.channel_store.clone(),
+                    state.conversation_logger.clone(),
+                    send_message_display_name,
+                    current_adapter.clone(),
+                )
+                .with_replied_flag(replied_flag.clone()),
+            )
             .await?;
     }
     handle
