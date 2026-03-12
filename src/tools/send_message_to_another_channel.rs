@@ -4,12 +4,14 @@ use crate::ChannelId;
 use crate::conversation::ChannelStore;
 use crate::conversation::history::ConversationLogger;
 use crate::messaging::MessagingManager;
+use crate::tools::reply::RepliedFlag;
 
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 /// Check if a string is a valid UUID format.
 /// Accepts standard UUID format: 8-4-4-4-12 hexadecimal digits.
@@ -30,6 +32,7 @@ pub struct SendMessageTool {
     conversation_logger: ConversationLogger,
     agent_display_name: String,
     current_adapter: Option<String>,
+    replied_flag: Option<RepliedFlag>,
 }
 
 impl std::fmt::Debug for SendMessageTool {
@@ -52,6 +55,20 @@ impl SendMessageTool {
             conversation_logger,
             agent_display_name,
             current_adapter,
+            replied_flag: None,
+        }
+    }
+
+    /// Attach a replied flag so successful sends mark the retrigger as relayed.
+    pub fn with_replied_flag(mut self, flag: RepliedFlag) -> Self {
+        self.replied_flag = Some(flag);
+        self
+    }
+
+    /// Mark the replied flag (if present) to indicate a message was delivered.
+    fn mark_replied(&self) {
+        if let Some(flag) = &self.replied_flag {
+            flag.store(true, Ordering::Relaxed);
         }
     }
 }
@@ -174,6 +191,7 @@ impl Tool for SendMessageTool {
                 "message sent via explicit signal: prefix"
             );
 
+            self.mark_replied();
             return Ok(SendMessageOutput {
                 success: true,
                 target: target.target,
@@ -208,6 +226,7 @@ impl Tool for SendMessageTool {
                         "message sent via implicit Signal shorthand"
                     );
 
+                    self.mark_replied();
                     return Ok(SendMessageOutput {
                         success: true,
                         target: target.target,
@@ -241,6 +260,7 @@ impl Tool for SendMessageTool {
             );
 
             // Email targets don't have a channel to log to.
+            self.mark_replied();
             return Ok(SendMessageOutput {
                 success: true,
                 target: explicit_target.target,
@@ -303,6 +323,7 @@ impl Tool for SendMessageTool {
             "message sent to channel and logged to destination history"
         );
 
+        self.mark_replied();
         Ok(SendMessageOutput {
             success: true,
             target: channel.display_name.unwrap_or_else(|| channel.id.clone()),
