@@ -13,6 +13,7 @@ use crate::messaging::MessagingManager;
 use crate::messaging::webchat::WebChatAdapter;
 use crate::projects::ProjectStore;
 use crate::prompts::PromptEngine;
+use crate::registry::{RegistryStore, SyncStatus};
 use crate::tasks::TaskStore;
 use crate::update::SharedUpdateStatus;
 use crate::{ProcessEvent, ProcessId};
@@ -84,6 +85,10 @@ pub struct ApiState {
     pub task_stores: arc_swap::ArcSwap<HashMap<String, Arc<TaskStore>>>,
     /// Per-agent project stores for project/repo/worktree CRUD operations.
     pub project_stores: arc_swap::ArcSwap<HashMap<String, Arc<ProjectStore>>>,
+    /// Per-agent registry stores for auto-discovered GitHub repos.
+    pub registry_stores: arc_swap::ArcSwap<HashMap<String, Arc<RegistryStore>>>,
+    /// Per-agent registry sync status.
+    pub registry_sync_status: arc_swap::ArcSwap<HashMap<String, Arc<ArcSwap<SyncStatus>>>>,
     /// Per-agent RuntimeConfig for reading live hot-reloaded configuration.
     pub runtime_configs: ArcSwap<HashMap<String, Arc<RuntimeConfig>>>,
     /// Per-agent MCP managers for status and reconnect APIs.
@@ -310,6 +315,8 @@ impl ApiState {
             cron_schedulers: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             task_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             project_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
+            registry_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
+            registry_sync_status: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             runtime_configs: ArcSwap::from_pointee(HashMap::new()),
             mcp_managers: ArcSwap::from_pointee(HashMap::new()),
             sandboxes: ArcSwap::from_pointee(HashMap::new()),
@@ -754,6 +761,16 @@ impl ApiState {
     /// Set the project stores for all agents.
     pub fn set_project_stores(&self, stores: HashMap<String, Arc<ProjectStore>>) {
         self.project_stores.store(Arc::new(stores));
+    }
+
+    /// Set the registry stores for all agents.
+    pub fn set_registry_stores(&self, stores: HashMap<String, Arc<RegistryStore>>) {
+        self.registry_stores.store(Arc::new(stores));
+    }
+
+    /// Set the registry sync status trackers for all agents.
+    pub fn set_registry_sync_status(&self, status: HashMap<String, Arc<ArcSwap<SyncStatus>>>) {
+        self.registry_sync_status.store(Arc::new(status));
     }
 
     /// Set the runtime configs for all agents.

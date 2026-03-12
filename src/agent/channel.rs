@@ -2051,11 +2051,12 @@ impl Channel {
             }
         };
 
-        if projects.is_empty() {
-            return None;
-        }
+        let mut contexts = Vec::new();
 
-        let mut contexts = Vec::with_capacity(projects.len());
+        // Collect project_ids that are linked to registry repos so we can
+        // avoid duplicating them when we append unlinked registry repos below.
+        let mut linked_project_ids = std::collections::HashSet::new();
+
         for project in &projects {
             let repos = match store.list_repos(&project.id).await {
                 Ok(repos) => repos,
@@ -2105,6 +2106,65 @@ impl Channel {
                     })
                     .collect(),
             });
+            linked_project_ids.insert(project.id.clone());
+        }
+
+        // Append enabled registry repos that are NOT already linked to a project,
+        // so the agent knows about all dynamically discovered repos.
+        if let Ok(registry_repos) = self
+            .deps
+            .registry_store
+            .list_repos(&self.deps.agent_id, true)
+            .await
+        {
+            for reg_repo in registry_repos {
+                // Skip repos already represented via a linked project.
+                if reg_repo
+                    .project_id
+                    .as_ref()
+                    .is_some_and(|pid| linked_project_ids.contains(pid))
+                {
+                    continue;
+                }
+                // Skip archived repos.
+                if reg_repo.is_archived {
+                    continue;
+                }
+                let root_path = reg_repo
+                    .local_path
+                    .clone()
+                    .unwrap_or_else(|| format!("(not cloned) {}", reg_repo.clone_url));
+                let mut desc_parts = Vec::new();
+                if let Some(ref lang) = reg_repo.language {
+                    desc_parts.push(lang.clone());
+                }
+                if let Some(ref model) = reg_repo.worker_model {
+                    desc_parts.push(format!("model: {model}"));
+                }
+                contexts.push(ProjectContext {
+                    name: reg_repo.full_name.clone(),
+                    root_path,
+                    description: if desc_parts.is_empty() {
+                        None
+                    } else {
+                        Some(desc_parts.join(", "))
+                    },
+                    tags: Vec::new(),
+                    repos: vec![ProjectRepoContext {
+                        name: reg_repo.name.clone(),
+                        path: reg_repo
+                            .local_path
+                            .unwrap_or_else(|| reg_repo.clone_url.clone()),
+                        default_branch: reg_repo.default_branch.clone(),
+                        remote_url: Some(reg_repo.clone_url),
+                    }],
+                    worktrees: Vec::new(),
+                });
+            }
+        }
+
+        if contexts.is_empty() {
+            return None;
         }
 
         match prompt_engine.render_projects_context(contexts) {
