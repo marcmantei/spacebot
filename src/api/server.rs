@@ -3,8 +3,8 @@
 use super::state::ApiState;
 use super::{
     agents, bindings, channels, config, cortex, cron, factory, ingest, links, mcp, memories,
-    messaging, models, opencode_proxy, projects, providers, secrets, settings, skills, ssh, system,
-    tasks, tools, webchat, workers,
+    messaging, models, opencode_proxy, projects, providers, registry, secrets, settings, skills,
+    ssh, system, tasks, tools, webchat, workers,
 };
 
 use axum::Json;
@@ -202,6 +202,15 @@ pub async fn start_http_server(
         .route("/agents/skills/upload", post(skills::upload_skill))
         .route("/agents/skills/remove", delete(skills::remove_skill))
         .route("/agents/tools", get(tools::list_tools))
+        // Registry: dynamic project discovery
+        .route("/registry/repos", get(registry::list_registry_repos))
+        .route("/registry/repos/detail", get(registry::get_registry_repo))
+        .route(
+            "/registry/repos/overrides",
+            put(registry::update_repo_overrides),
+        )
+        .route("/registry/sync", post(registry::trigger_sync))
+        .route("/registry/status", get(registry::registry_status))
         // Secret store management
         .route("/secrets/status", get(secrets::secrets_status))
         .route("/secrets", get(secrets::list_secrets))

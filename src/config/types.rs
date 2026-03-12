@@ -550,6 +550,8 @@ pub struct DefaultsConfig {
     pub worker_log_mode: crate::settings::WorkerLogMode,
     /// Projects workspace management defaults.
     pub projects: ProjectsConfig,
+    /// Registry configuration for auto-discovering GitHub repos.
+    pub registry: RegistryConfig,
 }
 
 impl std::fmt::Debug for DefaultsConfig {
@@ -581,6 +583,7 @@ impl std::fmt::Debug for DefaultsConfig {
             .field("opencode", &self.opencode)
             .field("worker_log_mode", &self.worker_log_mode)
             .field("projects", &self.projects)
+            .field("registry", &self.registry)
             .finish()
     }
 }
@@ -995,6 +998,36 @@ impl Default for ProjectsConfig {
     }
 }
 
+/// Registry configuration for auto-discovering GitHub repositories.
+#[derive(Debug, Clone)]
+pub struct RegistryConfig {
+    /// Whether the registry sync is enabled.
+    pub enabled: bool,
+    /// GitHub user/org names to discover repos from.
+    pub github_owners: Vec<String>,
+    /// Base directory for auto-cloning repos.
+    pub clone_base_dir: std::path::PathBuf,
+    /// Sync interval in seconds (default: 3600 = 1 hour).
+    pub sync_interval_secs: u64,
+    /// Whether to auto-clone newly discovered repos.
+    pub auto_clone: bool,
+    /// Repos to exclude from the registry (exact match or trailing `*` glob).
+    pub exclude_patterns: Vec<String>,
+}
+
+impl Default for RegistryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            github_owners: Vec::new(),
+            clone_base_dir: std::path::PathBuf::from("/tmp/spacebot-repos"),
+            sync_interval_secs: 3600,
+            auto_clone: false,
+            exclude_patterns: Vec::new(),
+        }
+    }
+}
+
 /// Current warmup lifecycle state.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1198,6 +1231,8 @@ pub struct ResolvedAgentConfig {
     pub sandbox: crate::sandbox::SandboxConfig,
     /// Projects workspace management settings.
     pub projects: ProjectsConfig,
+    /// Registry configuration for auto-discovering GitHub repos.
+    pub registry: RegistryConfig,
     /// Number of messages to fetch from the platform when a new channel is created.
     pub history_backfill_count: usize,
     pub cron: Vec<CronDef>,
@@ -1229,6 +1264,7 @@ impl Default for DefaultsConfig {
             opencode: OpenCodeConfig::default(),
             worker_log_mode: crate::settings::WorkerLogMode::default(),
             projects: ProjectsConfig::default(),
+            registry: RegistryConfig::default(),
         }
     }
 }
@@ -1300,6 +1336,7 @@ impl AgentConfig {
                 .projects
                 .clone()
                 .unwrap_or_else(|| defaults.projects.clone()),
+            registry: defaults.registry.clone(),
             history_backfill_count: defaults.history_backfill_count,
             cron: self.cron.clone(),
         }

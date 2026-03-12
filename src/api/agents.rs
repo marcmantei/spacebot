@@ -417,6 +417,8 @@ pub(super) async fn trigger_warmup(
             let (event_tx, memory_event_tx) = crate::create_process_event_buses();
             let project_store =
                 std::sync::Arc::new(crate::projects::ProjectStore::new(sqlite_pool.clone()));
+            let registry_store =
+                std::sync::Arc::new(crate::registry::RegistryStore::new(sqlite_pool.clone()));
             let deps = crate::AgentDeps {
                 agent_id: Arc::from(agent_id.as_str()),
                 memory_search,
@@ -431,6 +433,7 @@ pub(super) async fn trigger_warmup(
                 sandbox,
                 task_store,
                 project_store,
+                registry_store,
                 links: Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new())),
                 agent_names: Arc::new(std::collections::HashMap::new()),
                 humans: Arc::new(arc_swap::ArcSwap::from_pointee(humans)),
@@ -760,6 +763,8 @@ pub async fn create_agent_internal(
     );
 
     let project_store = std::sync::Arc::new(crate::projects::ProjectStore::new(db.sqlite.clone()));
+    let registry_store =
+        std::sync::Arc::new(crate::registry::RegistryStore::new(db.sqlite.clone()));
 
     // Inject active project root paths into the sandbox allowlist.
     crate::projects::refresh_sandbox_project_paths(&project_store, &arc_agent_id, &sandbox).await;
@@ -771,6 +776,7 @@ pub async fn create_agent_internal(
         mcp_manager: mcp_manager.clone(),
         task_store: task_store.clone(),
         project_store: project_store.clone(),
+        registry_store: registry_store.clone(),
         cron_tool: None,
         runtime_config: runtime_config.clone(),
         event_tx: event_tx.clone(),

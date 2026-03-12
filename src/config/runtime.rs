@@ -77,6 +77,8 @@ pub struct RuntimeConfig {
     pub sandbox: Arc<ArcSwap<crate::sandbox::SandboxConfig>>,
     /// Projects workspace management configuration.
     pub projects: ArcSwap<crate::config::ProjectsConfig>,
+    /// Registry configuration for auto-discovering GitHub repos.
+    pub registry: ArcSwap<crate::config::RegistryConfig>,
     /// Shared browser state for persistent sessions.
     ///
     /// When `browser.persist_session = true`, all workers share this handle so
@@ -141,6 +143,7 @@ impl RuntimeConfig {
             secrets: ArcSwap::from_pointee(None),
             sandbox: Arc::new(ArcSwap::from_pointee(agent_config.sandbox.clone())),
             projects: ArcSwap::from_pointee(agent_config.projects.clone()),
+            registry: ArcSwap::from_pointee(agent_config.registry.clone()),
             shared_browser: if agent_config.browser.persist_session {
                 Some(crate::tools::browser::new_shared_browser_handle())
             } else {
@@ -294,6 +297,8 @@ impl RuntimeConfig {
         new_sandbox.project_paths = existing_project_paths;
         self.sandbox.store(Arc::new(new_sandbox));
         self.projects.store(Arc::new(resolved.projects.clone()));
+        self.registry
+            .store(Arc::new(config.defaults.registry.clone()));
 
         let old_opencode = self.opencode.load().as_ref().clone();
         let new_opencode = config.defaults.opencode.clone();

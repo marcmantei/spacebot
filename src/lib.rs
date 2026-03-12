@@ -22,6 +22,7 @@ pub mod openai_auth;
 pub mod opencode;
 pub mod projects;
 pub mod prompts;
+pub mod registry;
 pub mod sandbox;
 pub mod secrets;
 pub mod self_awareness;
@@ -386,6 +387,7 @@ pub struct AgentDeps {
     pub mcp_manager: Arc<mcp::McpManager>,
     pub task_store: Arc<tasks::TaskStore>,
     pub project_store: Arc<projects::ProjectStore>,
+    pub registry_store: Arc<registry::RegistryStore>,
     pub cron_tool: Option<tools::CronTool>,
     pub runtime_config: Arc<config::RuntimeConfig>,
     pub event_tx: tokio::sync::broadcast::Sender<ProcessEvent>,

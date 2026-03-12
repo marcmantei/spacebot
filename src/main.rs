@@ -2528,6 +2528,7 @@ async fn initialize_agents(
             spacebot::memory::MemoryStore::with_agent_id(db.sqlite.clone(), &agent_config.id);
         let task_store = Arc::new(spacebot::tasks::TaskStore::new(db.sqlite.clone()));
         let project_store = Arc::new(spacebot::projects::ProjectStore::new(db.sqlite.clone()));
+        let registry_store = Arc::new(spacebot::registry::RegistryStore::new(db.sqlite.clone()));
         let embedding_table = spacebot::memory::EmbeddingTable::open_or_create(&db.lance)
             .await
             .with_context(|| {
@@ -2635,6 +2636,7 @@ async fn initialize_agents(
             mcp_manager,
             task_store: task_store.clone(),
             project_store: project_store.clone(),
+            registry_store: registry_store.clone(),
             cron_tool: None,
             runtime_config,
             event_tx,
@@ -2707,6 +2709,8 @@ async fn initialize_agents(
         let mut mcp_managers = std::collections::HashMap::new();
         let mut task_stores = std::collections::HashMap::new();
         let mut project_stores = std::collections::HashMap::new();
+        let mut registry_stores = std::collections::HashMap::new();
+        let mut registry_sync_statuses = std::collections::HashMap::new();
         let mut agent_workspaces = std::collections::HashMap::new();
         let mut agent_identity_dirs = std::collections::HashMap::new();
         let mut agent_data_dirs = std::collections::HashMap::new();
@@ -2720,6 +2724,24 @@ async fn initialize_agents(
             mcp_managers.insert(agent_id.to_string(), agent.deps.mcp_manager.clone());
             task_stores.insert(agent_id.to_string(), agent.deps.task_store.clone());
             project_stores.insert(agent_id.to_string(), agent.deps.project_store.clone());
+            registry_stores.insert(agent_id.to_string(), agent.deps.registry_store.clone());
+            // Registry sync: start background loop for each agent
+            {
+                let sync_status = std::sync::Arc::new(
+                    arc_swap::ArcSwap::from_pointee(spacebot::registry::SyncStatus::default()),
+                );
+                registry_sync_statuses
+                    .insert(agent_id.to_string(), sync_status.clone());
+                let reg_store = agent.deps.registry_store.as_ref().clone();
+                let reg_agent_id = agent_id.to_string();
+                let reg_runtime_config = agent.deps.runtime_config.clone();
+                tokio::spawn(spacebot::registry::sync::registry_sync_loop(
+                    reg_store,
+                    reg_agent_id,
+                    reg_runtime_config,
+                    sync_status,
+                ));
+            }
             agent_workspaces.insert(agent_id.to_string(), agent.config.workspace.clone());
             agent_identity_dirs.insert(agent_id.to_string(), agent.config.identity_dir.clone());
             agent_data_dirs.insert(agent_id.to_string(), agent.config.data_dir.clone());
@@ -2744,6 +2766,8 @@ async fn initialize_agents(
         api_state.set_mcp_managers(mcp_managers);
         api_state.set_task_stores(task_stores);
         api_state.set_project_stores(project_stores);
+        api_state.set_registry_stores(registry_stores);
+        api_state.set_registry_sync_status(registry_sync_statuses);
         api_state.set_runtime_configs(runtime_configs);
         api_state.set_agent_workspaces(agent_workspaces);
         api_state.set_agent_identity_dirs(agent_identity_dirs);

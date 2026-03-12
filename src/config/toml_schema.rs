@@ -294,6 +294,20 @@ pub(super) struct TomlDefaultsConfig {
     pub(super) opencode: Option<TomlOpenCodeConfig>,
     pub(super) worker_log_mode: Option<String>,
     pub(super) projects: Option<TomlProjectsConfig>,
+    pub(super) registry: Option<TomlRegistryConfig>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TomlRegistryConfig {
+    #[serde(default)]
+    pub(super) enabled: Option<bool>,
+    #[serde(default)]
+    pub(super) github_owners: Option<Vec<String>>,
+    pub(super) clone_base_dir: Option<String>,
+    pub(super) sync_interval_secs: Option<u64>,
+    pub(super) auto_clone: Option<bool>,
+    #[serde(default)]
+    pub(super) exclude_patterns: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
