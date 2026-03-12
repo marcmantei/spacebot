@@ -12,8 +12,8 @@ use crate::memory::{EmbeddingModel, MemorySearch};
 use crate::messaging::MessagingManager;
 use crate::messaging::webchat::WebChatAdapter;
 use crate::projects::ProjectStore;
-use crate::registry::{RegistryStore, SyncStatus};
 use crate::prompts::PromptEngine;
+use crate::registry::{RegistryStore, SyncStatus};
 use crate::tasks::TaskStore;
 use crate::update::SharedUpdateStatus;
 use crate::{ProcessEvent, ProcessId};
@@ -769,10 +769,7 @@ impl ApiState {
     }
 
     /// Set the registry sync status trackers for all agents.
-    pub fn set_registry_sync_status(
-        &self,
-        status: HashMap<String, Arc<ArcSwap<SyncStatus>>>,
-    ) {
+    pub fn set_registry_sync_status(&self, status: HashMap<String, Arc<ArcSwap<SyncStatus>>>) {
         self.registry_sync_status.store(Arc::new(status));
     }
 

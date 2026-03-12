@@ -1617,14 +1617,14 @@ impl Config {
                     let base = &base_defaults.registry;
                     RegistryConfig {
                         enabled: r.enabled.unwrap_or(base.enabled),
-                        github_owners: r.github_owners.unwrap_or_else(|| base.github_owners.clone()),
+                        github_owners: r
+                            .github_owners
+                            .unwrap_or_else(|| base.github_owners.clone()),
                         clone_base_dir: r
                             .clone_base_dir
                             .map(std::path::PathBuf::from)
                             .unwrap_or_else(|| base.clone_base_dir.clone()),
-                        sync_interval_secs: r
-                            .sync_interval_secs
-                            .unwrap_or(base.sync_interval_secs),
+                        sync_interval_secs: r.sync_interval_secs.unwrap_or(base.sync_interval_secs),
                         auto_clone: r.auto_clone.unwrap_or(base.auto_clone),
                         exclude_patterns: r
                             .exclude_patterns

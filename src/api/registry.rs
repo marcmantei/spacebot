@@ -72,9 +72,7 @@ pub(super) async fn list_registry_repos(
     Query(query): Query<RepoListQuery>,
 ) -> Result<Json<RepoListResponse>, StatusCode> {
     let stores = state.registry_stores.load();
-    let store = stores
-        .get(&query.agent_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let store = stores.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
     let repos = store
         .list_repos(&query.agent_id, query.enabled_only)
@@ -91,9 +89,7 @@ pub(super) async fn get_registry_repo(
     Query(query): Query<RepoQuery>,
 ) -> Result<Json<RegistryRepo>, StatusCode> {
     let stores = state.registry_stores.load();
-    let store = stores
-        .get(&query.agent_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let store = stores.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
     let repo = store
         .get_by_full_name(&query.agent_id, &query.full_name)
@@ -110,9 +106,7 @@ pub(super) async fn update_repo_overrides(
     Json(body): Json<UpdateRepoOverridesBody>,
 ) -> Result<Json<RegistryRepo>, StatusCode> {
     let stores = state.registry_stores.load();
-    let store = stores
-        .get(&body.agent_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let store = stores.get(&body.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
     let repo = store
         .set_overrides(
@@ -134,14 +128,10 @@ pub(super) async fn trigger_sync(
     Query(query): Query<AgentQuery>,
 ) -> Result<Json<SyncResponse>, StatusCode> {
     let stores = state.registry_stores.load();
-    let store = stores
-        .get(&query.agent_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let store = stores.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
     let configs = state.runtime_configs.load();
-    let runtime_config = configs
-        .get(&query.agent_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let runtime_config = configs.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
 
     let registry_config = runtime_config.registry.load();
 
