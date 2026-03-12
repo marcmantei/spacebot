@@ -31,19 +31,20 @@ pub struct SyncResult {
 }
 
 /// Current sync status.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SyncStatus {
+    #[default]
     Idle,
     Syncing,
-    Failed { error: String, at: String },
-    Completed { at: String, result: SyncResult },
-}
-
-impl Default for SyncStatus {
-    fn default() -> Self {
-        Self::Idle
-    }
+    Failed {
+        error: String,
+        at: String,
+    },
+    Completed {
+        at: String,
+        result: SyncResult,
+    },
 }
 
 /// JSON shape returned by `gh repo list --json`.
@@ -111,10 +112,10 @@ fn matches_exclude(full_name: &str, patterns: &[String]) -> bool {
             return true;
         }
         // Support trailing wildcard: "owner/*-test" not supported, but "owner/prefix*" is.
-        if let Some(prefix) = pattern.strip_suffix('*') {
-            if full_name.starts_with(prefix) {
-                return true;
-            }
+        if let Some(prefix) = pattern.strip_suffix('*')
+            && full_name.starts_with(prefix)
+        {
+            return true;
         }
     }
     false
