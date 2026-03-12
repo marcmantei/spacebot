@@ -2007,34 +2007,33 @@ async fn run(
                 // conversation_id format: "webhook:github:{owner/repo}"
                 if let Some(repo_full_name) = conversation_id
                     .strip_prefix("webhook:github:")
+                    && let Some(agent) = agents.get(&agent_id)
                 {
-                    if let Some(agent) = agents.get(&agent_id) {
-                        let registry = &agent.deps.registry_store;
-                        match registry.get_by_full_name(&agent_id, repo_full_name).await {
-                            Ok(Some(reg_repo)) if !reg_repo.enabled => {
-                                tracing::debug!(
-                                    repo = %repo_full_name,
-                                    "webhook event dropped: repo disabled in registry"
-                                );
-                                continue;
-                            }
-                            Ok(None) => {
-                                tracing::debug!(
-                                    repo = %repo_full_name,
-                                    "webhook event dropped: repo not in registry"
-                                );
-                                continue;
-                            }
-                            Err(error) => {
-                                tracing::warn!(
-                                    repo = %repo_full_name,
-                                    %error,
-                                    "registry lookup failed, allowing webhook event"
-                                );
-                            }
-                            Ok(Some(_)) => {
-                                // Repo is enabled, proceed.
-                            }
+                    let registry = &agent.deps.registry_store;
+                    match registry.get_by_full_name(&agent_id, repo_full_name).await {
+                        Ok(Some(reg_repo)) if !reg_repo.enabled => {
+                            tracing::debug!(
+                                repo = %repo_full_name,
+                                "webhook event dropped: repo disabled in registry"
+                            );
+                            continue;
+                        }
+                        Ok(None) => {
+                            tracing::debug!(
+                                repo = %repo_full_name,
+                                "webhook event dropped: repo not in registry"
+                            );
+                            continue;
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                repo = %repo_full_name,
+                                %error,
+                                "registry lookup failed, allowing webhook event"
+                            );
+                        }
+                        Ok(Some(_)) => {
+                            // Repo is enabled, proceed.
                         }
                     }
                 }
