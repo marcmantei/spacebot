@@ -9,8 +9,8 @@ use crate::llm::routing::{
 use futures::StreamExt as _;
 use rig::completion::{self, CompletionError, CompletionModel, CompletionRequest, GetTokenUsage};
 use rig::message::{
-    AssistantContent, DocumentSourceKind, Image, Message, MimeType, Text, ToolCall, ToolFunction,
-    UserContent,
+    AssistantContent, DocumentSourceKind, Image, Message, MimeType, ReasoningContent, Text,
+    ToolCall, ToolFunction, UserContent,
 };
 use rig::one_or_many::OneOrMany;
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
@@ -110,6 +110,11 @@ impl SpacebotModel {
             "openai-chatgpt" => self
                 .llm_manager
                 .get_openai_chatgpt_provider()
+                .await
+                .map_err(|error| CompletionError::ProviderError(error.to_string())),
+            "github-copilot" => self
+                .llm_manager
+                .get_github_copilot_provider()
                 .await
                 .map_err(|error| CompletionError::ProviderError(error.to_string())),
             _ => self
@@ -1364,12 +1369,18 @@ fn convert_messages_to_openai(messages: &OneOrMany<Message>) -> Vec<serde_json::
             }
             Message::Assistant { content, .. } => {
                 let mut text_parts = Vec::new();
+                let mut reasoning_parts = Vec::new();
+                let mut saw_reasoning = false;
                 let mut tool_calls = Vec::new();
 
                 for item in content.iter() {
                     match item {
                         AssistantContent::Text(t) => {
                             text_parts.push(t.text.clone());
+                        }
+                        AssistantContent::Reasoning(reasoning) => {
+                            saw_reasoning = true;
+                            reasoning_parts.extend(collect_reasoning_text_parts(reasoning));
                         }
                         AssistantContent::ToolCall(tc) => {
                             // OpenAI expects arguments as a JSON string.
@@ -1398,6 +1409,11 @@ fn convert_messages_to_openai(messages: &OneOrMany<Message>) -> Vec<serde_json::
                 let mut msg = serde_json::json!({"role": "assistant"});
                 if !text_parts.is_empty() {
                     msg["content"] = serde_json::json!(text_parts.join("\n"));
+                } else if !tool_calls.is_empty() || saw_reasoning {
+                    msg["content"] = serde_json::Value::Null;
+                }
+                if saw_reasoning {
+                    msg["reasoning_content"] = serde_json::json!(reasoning_parts.join("\n"));
                 }
                 if !tool_calls.is_empty() {
                     msg["tool_calls"] = serde_json::json!(tool_calls);
@@ -1408,6 +1424,22 @@ fn convert_messages_to_openai(messages: &OneOrMany<Message>) -> Vec<serde_json::
     }
 
     result
+}
+
+fn collect_reasoning_text_parts(reasoning: &rig::message::Reasoning) -> Vec<String> {
+    reasoning
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            ReasoningContent::Text { text, .. } => (!text.trim().is_empty()).then(|| text.clone()),
+            ReasoningContent::Summary(summary) => {
+                (!summary.trim().is_empty()).then(|| summary.clone())
+            }
+            ReasoningContent::Encrypted(_) | ReasoningContent::Redacted { .. } => None,
+            #[allow(unreachable_patterns)]
+            _ => None,
+        })
+        .collect()
 }
 
 fn convert_messages_to_openai_responses(messages: &OneOrMany<Message>) -> Vec<serde_json::Value> {
@@ -1456,6 +1488,9 @@ fn convert_messages_to_openai_responses(messages: &OneOrMany<Message>) -> Vec<se
             }
             Message::Assistant { content, .. } => {
                 let mut text_parts = Vec::new();
+                let mut reasoning_parts = Vec::new();
+                let mut saw_reasoning = false;
+                let mut function_calls = Vec::new();
 
                 for item in content.iter() {
                     match item {
@@ -1465,6 +1500,10 @@ fn convert_messages_to_openai_responses(messages: &OneOrMany<Message>) -> Vec<se
                                 "text": text.text,
                             }));
                         }
+                        AssistantContent::Reasoning(reasoning) => {
+                            saw_reasoning = true;
+                            reasoning_parts.extend(collect_reasoning_text_parts(reasoning));
+                        }
                         AssistantContent::ToolCall(tool_call) => {
                             let arguments = serde_json::to_string(&tool_call.function.arguments)
                                 .unwrap_or_else(|_| "{}".to_string());
@@ -1473,7 +1512,7 @@ fn convert_messages_to_openai_responses(messages: &OneOrMany<Message>) -> Vec<se
                                 .as_deref()
                                 .filter(|call_id| !call_id.is_empty())
                                 .unwrap_or(&tool_call.id);
-                            result.push(serde_json::json!({
+                            function_calls.push(serde_json::json!({
                                 "type": "function_call",
                                 "name": tool_call.function.name,
                                 "arguments": arguments,
@@ -1485,11 +1524,24 @@ fn convert_messages_to_openai_responses(messages: &OneOrMany<Message>) -> Vec<se
                 }
 
                 if !text_parts.is_empty() {
-                    result.push(serde_json::json!({
+                    let mut message = serde_json::json!({
                         "role": "assistant",
                         "content": text_parts,
+                    });
+                    if saw_reasoning {
+                        message["reasoning_content"] =
+                            serde_json::json!(reasoning_parts.join("\n"));
+                    }
+                    result.push(message);
+                } else if saw_reasoning {
+                    result.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": [],
+                        "reasoning_content": reasoning_parts.join("\n"),
                     }));
                 }
+
+                result.extend(function_calls);
             }
         }
     }
@@ -3103,6 +3155,93 @@ mod tests {
             }
             _ => panic!("expected tool call"),
         }
+    }
+
+    #[test]
+    fn convert_messages_to_openai_preserves_reasoning_for_tool_calls() {
+        let messages = OneOrMany::one(Message::Assistant {
+            id: None,
+            content: OneOrMany::many(vec![
+                AssistantContent::Reasoning(rig::message::Reasoning::multi(vec![
+                    "step one".to_string(),
+                    "step two".to_string(),
+                ])),
+                AssistantContent::tool_call(
+                    "call_1",
+                    "file",
+                    serde_json::json!({"operation": "list", "path": "."}),
+                ),
+            ])
+            .expect("non-empty assistant content"),
+        });
+
+        let converted = convert_messages_to_openai(&messages);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0]["role"], "assistant");
+        assert!(converted[0]["content"].is_null());
+        assert_eq!(converted[0]["reasoning_content"], "step one\nstep two");
+        assert_eq!(converted[0]["tool_calls"][0]["function"]["name"], "file");
+        assert_eq!(
+            converted[0]["tool_calls"][0]["function"]["arguments"],
+            "{\"operation\":\"list\",\"path\":\".\"}"
+        );
+    }
+
+    #[test]
+    fn convert_messages_to_openai_responses_preserves_reasoning_for_tool_calls() {
+        let messages = OneOrMany::one(Message::Assistant {
+            id: None,
+            content: OneOrMany::many(vec![
+                AssistantContent::Reasoning(rig::message::Reasoning::new("inspect identity files")),
+                AssistantContent::tool_call(
+                    "call_1",
+                    "file",
+                    serde_json::json!({"operation": "list", "path": "."}),
+                ),
+            ])
+            .expect("non-empty assistant content"),
+        });
+
+        let converted = convert_messages_to_openai_responses(&messages);
+        assert_eq!(converted.len(), 2);
+        assert_eq!(converted[0]["role"], "assistant");
+        assert_eq!(converted[0]["content"], serde_json::json!([]));
+        assert_eq!(converted[0]["reasoning_content"], "inspect identity files");
+        assert_eq!(converted[1]["type"], "function_call");
+        assert_eq!(converted[1]["name"], "file");
+    }
+
+    #[test]
+    fn convert_messages_to_openai_preserves_empty_reasoning_content_for_redacted_reasoning() {
+        let messages = OneOrMany::one(Message::Assistant {
+            id: None,
+            content: OneOrMany::many(vec![AssistantContent::Reasoning(
+                rig::message::Reasoning::redacted("hidden").with_id("rs_123".to_string()),
+            )])
+            .expect("non-empty assistant content"),
+        });
+
+        let converted = convert_messages_to_openai(&messages);
+        assert_eq!(converted.len(), 1);
+        assert!(converted[0]["content"].is_null());
+        assert_eq!(converted[0]["reasoning_content"], "");
+    }
+
+    #[test]
+    fn convert_messages_to_openai_responses_preserves_empty_reasoning_content_for_redacted_reasoning()
+     {
+        let messages = OneOrMany::one(Message::Assistant {
+            id: None,
+            content: OneOrMany::many(vec![AssistantContent::Reasoning(
+                rig::message::Reasoning::encrypted("ciphertext").with_id("rs_456".to_string()),
+            )])
+            .expect("non-empty assistant content"),
+        });
+
+        let converted = convert_messages_to_openai_responses(&messages);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0]["content"], serde_json::json!([]));
+        assert_eq!(converted[0]["reasoning_content"], "");
     }
 
     #[test]
