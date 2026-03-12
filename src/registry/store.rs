@@ -115,14 +115,12 @@ impl RegistryStore {
         agent_id: &str,
         full_name: &str,
     ) -> Result<Option<RegistryRepo>> {
-        let row = sqlx::query(
-            "SELECT * FROM registry_repos WHERE agent_id = ? AND full_name = ?",
-        )
-        .bind(agent_id)
-        .bind(full_name)
-        .fetch_optional(&self.pool)
-        .await
-        .context("failed to fetch registry repo by full_name")?;
+        let row = sqlx::query("SELECT * FROM registry_repos WHERE agent_id = ? AND full_name = ?")
+            .bind(agent_id)
+            .bind(full_name)
+            .fetch_optional(&self.pool)
+            .await
+            .context("failed to fetch registry repo by full_name")?;
 
         row.map(|r| row_to_registry_repo(&r)).transpose()
     }
@@ -153,13 +151,11 @@ impl RegistryStore {
             .await
             .context("failed to list enabled registry repos")?
         } else {
-            sqlx::query(
-                "SELECT * FROM registry_repos WHERE agent_id = ? ORDER BY full_name ASC",
-            )
-            .bind(agent_id)
-            .fetch_all(&self.pool)
-            .await
-            .context("failed to list registry repos")?
+            sqlx::query("SELECT * FROM registry_repos WHERE agent_id = ? ORDER BY full_name ASC")
+                .bind(agent_id)
+                .fetch_all(&self.pool)
+                .await
+                .context("failed to list registry repos")?
         };
 
         rows.iter().map(row_to_registry_repo).collect()
@@ -290,14 +286,12 @@ impl RegistryStore {
 
     /// Delete a repo from the registry.
     pub async fn delete_repo(&self, agent_id: &str, full_name: &str) -> Result<bool> {
-        let result = sqlx::query(
-            "DELETE FROM registry_repos WHERE agent_id = ? AND full_name = ?",
-        )
-        .bind(agent_id)
-        .bind(full_name)
-        .execute(&self.pool)
-        .await
-        .context("failed to delete registry repo")?;
+        let result = sqlx::query("DELETE FROM registry_repos WHERE agent_id = ? AND full_name = ?")
+            .bind(agent_id)
+            .bind(full_name)
+            .execute(&self.pool)
+            .await
+            .context("failed to delete registry repo")?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -322,9 +316,7 @@ fn row_to_registry_repo(row: &sqlx::sqlite::SqliteRow) -> Result<RegistryRepo> {
         is_fork: row
             .try_get::<bool, _>("is_fork")
             .context("missing is_fork")?,
-        visibility: row
-            .try_get("visibility")
-            .context("missing visibility")?,
+        visibility: row.try_get("visibility").context("missing visibility")?,
         language: row.try_get("language").unwrap_or(None),
         local_path: row.try_get("local_path").unwrap_or(None),
         clone_url: row.try_get("clone_url").context("missing clone_url")?,
@@ -471,10 +463,7 @@ mod tests {
 
         // Only ChargePilot-Launch was seen in this sync
         let archived = store
-            .mark_absent_as_archived(
-                "main",
-                &["marcmantei/ChargePilot-Launch".into()],
-            )
+            .mark_absent_as_archived("main", &["marcmantei/ChargePilot-Launch".into()])
             .await
             .unwrap();
         assert_eq!(archived, 1);

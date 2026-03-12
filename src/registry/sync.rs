@@ -2,11 +2,11 @@
 //! against the local registry store.
 
 use super::store::{RegistryStore, UpsertRepoInput};
+use crate::OutboundResponse;
 use crate::config::RegistryConfig;
 use crate::error::Result;
 use crate::messaging::MessagingManager;
 use crate::messaging::target::parse_delivery_target;
-use crate::OutboundResponse;
 
 use anyhow::Context as _;
 use arc_swap::ArcSwap;
@@ -36,14 +36,8 @@ pub struct SyncResult {
 pub enum SyncStatus {
     Idle,
     Syncing,
-    Failed {
-        error: String,
-        at: String,
-    },
-    Completed {
-        at: String,
-        result: SyncResult,
-    },
+    Failed { error: String, at: String },
+    Completed { at: String, result: SyncResult },
 }
 
 impl Default for SyncStatus {
@@ -201,8 +195,7 @@ pub async fn sync_registry(
                                         );
                                     }
                                     Err(e) => {
-                                        let msg =
-                                            format!("failed to clone {}: {}", full_name, e);
+                                        let msg = format!("failed to clone {}: {}", full_name, e);
                                         tracing::warn!("{}", msg);
                                         result.errors.push(msg);
                                     }
@@ -233,9 +226,7 @@ pub async fn sync_registry(
     if !all_seen.is_empty() {
         // Snapshot non-archived names before marking, so we can report which ones changed.
         let before = store.get_non_archived_names(agent_id).await?;
-        result.archived = store
-            .mark_absent_as_archived(agent_id, &all_seen)
-            .await? as usize;
+        result.archived = store.mark_absent_as_archived(agent_id, &all_seen).await? as usize;
         if result.archived > 0 {
             let seen_set: std::collections::HashSet<&str> =
                 all_seen.iter().map(|s| s.as_str()).collect();
@@ -252,12 +243,7 @@ pub async fn sync_registry(
 /// Clone a repo using `gh repo clone`.
 async fn auto_clone_repo(full_name: &str, target_dir: &Path) -> Result<()> {
     let output = tokio::process::Command::new("gh")
-        .args([
-            "repo",
-            "clone",
-            full_name,
-            &target_dir.to_string_lossy(),
-        ])
+        .args(["repo", "clone", full_name, &target_dir.to_string_lossy()])
         .output()
         .await
         .context("failed to run `gh repo clone`")?;
@@ -309,12 +295,7 @@ pub async fn registry_sync_loop(
 
                 // Send notification if there are new or archived repos.
                 if !result.new_repos.is_empty() || !result.archived_repos.is_empty() {
-                    send_sync_notification(
-                        &current_config,
-                        &messaging_manager,
-                        &result,
-                    )
-                    .await;
+                    send_sync_notification(&current_config, &messaging_manager, &result).await;
                 }
 
                 status.store(Arc::new(SyncStatus::Completed {
@@ -369,7 +350,10 @@ async fn send_sync_notification(
         }
     }
     if !result.archived_repos.is_empty() {
-        lines.push(format!("\nArchived repos ({}):", result.archived_repos.len()));
+        lines.push(format!(
+            "\nArchived repos ({}):",
+            result.archived_repos.len()
+        ));
         for name in &result.archived_repos {
             lines.push(format!("  − {}", name));
         }
@@ -377,7 +361,11 @@ async fn send_sync_notification(
     let text = lines.join("\n");
 
     if let Err(e) = mm
-        .broadcast(&target.adapter, &target.target, OutboundResponse::Text(text))
+        .broadcast(
+            &target.adapter,
+            &target.target,
+            OutboundResponse::Text(text),
+        )
         .await
     {
         tracing::warn!(error = %e, "failed to send registry sync notification");
@@ -390,9 +378,18 @@ mod tests {
 
     #[test]
     fn test_matches_exclude() {
-        assert!(matches_exclude("marcmantei/liralot-config", &["marcmantei/liralot-config".into()]));
-        assert!(matches_exclude("marcmantei/test-repo", &["marcmantei/test*".into()]));
-        assert!(!matches_exclude("marcmantei/ChargePilot", &["marcmantei/liralot-config".into()]));
+        assert!(matches_exclude(
+            "marcmantei/liralot-config",
+            &["marcmantei/liralot-config".into()]
+        ));
+        assert!(matches_exclude(
+            "marcmantei/test-repo",
+            &["marcmantei/test*".into()]
+        ));
+        assert!(!matches_exclude(
+            "marcmantei/ChargePilot",
+            &["marcmantei/liralot-config".into()]
+        ));
         assert!(!matches_exclude("other/repo", &["marcmantei/*".into()]));
     }
 

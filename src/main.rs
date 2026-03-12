@@ -2727,11 +2727,10 @@ async fn initialize_agents(
             registry_stores.insert(agent_id.to_string(), agent.deps.registry_store.clone());
             // Registry sync: prepare status (spawn deferred until messaging_manager is set)
             {
-                let sync_status = std::sync::Arc::new(
-                    arc_swap::ArcSwap::from_pointee(spacebot::registry::SyncStatus::default()),
-                );
-                registry_sync_statuses
-                    .insert(agent_id.to_string(), sync_status.clone());
+                let sync_status = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+                    spacebot::registry::SyncStatus::default(),
+                ));
+                registry_sync_statuses.insert(agent_id.to_string(), sync_status.clone());
             }
             agent_workspaces.insert(agent_id.to_string(), agent.config.workspace.clone());
             agent_identity_dirs.insert(agent_id.to_string(), agent.config.identity_dir.clone());
