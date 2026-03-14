@@ -52,6 +52,32 @@ enum Command {
     /// Manage secrets stored in the running instance
     #[command(subcommand)]
     Secrets(SecretsCommand),
+    /// Pull latest source, rebuild, and restart the service
+    Upgrade {
+        /// Source directory (default: ~/.spacebot-src or SPACEBOT_SRC_DIR)
+        #[arg(long)]
+        source_dir: Option<std::path::PathBuf>,
+
+        /// Git remote to fetch from
+        #[arg(long, default_value = "origin")]
+        remote: String,
+
+        /// Git branch to pull (default: current branch)
+        #[arg(long)]
+        branch: Option<String>,
+
+        /// Binary install path (default: path of current executable)
+        #[arg(long)]
+        install_path: Option<std::path::PathBuf>,
+
+        /// Skip the service restart step
+        #[arg(long)]
+        no_restart: bool,
+
+        /// Only check for updates, don't apply
+        #[arg(long)]
+        check_only: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -347,6 +373,21 @@ fn main() -> anyhow::Result<()> {
         Command::Skill(skill_cmd) => cmd_skill(cli.config, skill_cmd),
         Command::Auth(auth_cmd) => cmd_auth(cli.config, auth_cmd),
         Command::Secrets(secrets_cmd) => cmd_secrets(cli.config, secrets_cmd),
+        Command::Upgrade {
+            source_dir,
+            remote,
+            branch,
+            install_path,
+            no_restart,
+            check_only,
+        } => cmd_upgrade(
+            source_dir,
+            remote,
+            branch,
+            install_path,
+            no_restart,
+            check_only,
+        ),
     }
 }
 
@@ -494,6 +535,88 @@ fn cmd_stop_if_running() {
             spacebot::daemon::wait_for_exit(pid);
         }
     });
+}
+
+fn cmd_upgrade(
+    source_dir: Option<std::path::PathBuf>,
+    remote: String,
+    branch: Option<String>,
+    install_path: Option<std::path::PathBuf>,
+    no_restart: bool,
+    check_only: bool,
+) -> anyhow::Result<()> {
+    use spacebot::upgrade;
+
+    let source_dir = upgrade::resolve_source_dir(source_dir.as_deref())?;
+    let install_path = upgrade::resolve_install_path(install_path.as_deref())?;
+
+    let branch = match branch {
+        Some(b) => b,
+        None => upgrade::current_branch(&source_dir)?,
+    };
+
+    eprintln!("source:  {}", source_dir.display());
+    eprintln!("remote:  {remote}/{branch}");
+    eprintln!("binary:  {}", install_path.display());
+    eprintln!();
+
+    // Check for updates
+    eprint!("checking for updates... ");
+    let check = upgrade::check_for_updates(&source_dir, &remote, &branch)?;
+
+    if !check.has_updates {
+        eprintln!("already up to date ({}).", &check.local_head[..8]);
+        return Ok(());
+    }
+
+    eprintln!(
+        "{} new commit{}:",
+        check.commit_count,
+        if check.commit_count == 1 { "" } else { "s" }
+    );
+    for summary in &check.commit_summaries {
+        eprintln!("  {summary}");
+    }
+    eprintln!();
+
+    if check_only {
+        return Ok(());
+    }
+
+    // Pull
+    eprint!("pulling... ");
+    upgrade::pull(&source_dir)?;
+    eprintln!("done.");
+
+    // Build
+    eprintln!("building release binary...");
+    let built_binary = upgrade::build_release(&source_dir, |line| {
+        eprintln!("  {line}");
+    })?;
+    eprintln!("build complete.");
+    eprintln!();
+
+    // Stop the running daemon before swapping the binary
+    cmd_stop_if_running();
+
+    // Install
+    eprint!("installing binary... ");
+    upgrade::install_binary(&built_binary, &install_path)?;
+    eprintln!("done.");
+
+    // Restart
+    if no_restart {
+        eprintln!("skipping restart (--no-restart).");
+    } else {
+        eprint!("restarting service... ");
+        upgrade::restart_service()?;
+        eprintln!("done.");
+    }
+
+    eprintln!();
+    eprintln!("upgrade complete: {} → {}", &check.local_head[..8], &check.remote_head[..8]);
+
+    Ok(())
 }
 
 fn cmd_status() -> anyhow::Result<()> {

@@ -33,6 +33,7 @@ pub mod tasks;
 pub mod telemetry;
 pub mod tools;
 pub mod update;
+pub mod upgrade;
 
 pub use error::{Error, Result};
 
