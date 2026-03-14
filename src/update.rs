@@ -105,8 +105,14 @@ pub fn new_shared_status() -> SharedUpdateStatus {
             }
         }
         Deployment::Native => {
-            status.cannot_apply_reason =
-                Some("Native/source installs update manually (rebuild + restart).".to_string());
+            let has_source = crate::upgrade::resolve_source_dir(None).is_ok();
+            status.can_apply = has_source;
+            if !has_source {
+                status.cannot_apply_reason = Some(
+                    "Source directory not found. Set SPACEBOT_SRC_DIR or clone to ~/.spacebot-src."
+                        .to_string(),
+                );
+            }
         }
         Deployment::Hosted => {
             status.cannot_apply_reason = Some(
@@ -231,13 +237,21 @@ struct ApplyCapability {
 
 async fn detect_apply_capability(deployment: Deployment) -> ApplyCapability {
     match deployment {
-        Deployment::Native => ApplyCapability {
-            can_apply: false,
-            cannot_apply_reason: Some(
-                "Native/source installs update manually (rebuild + restart).".to_string(),
-            ),
-            docker_image: None,
-        },
+        Deployment::Native => {
+            let has_source = crate::upgrade::resolve_source_dir(None).is_ok();
+            ApplyCapability {
+                can_apply: has_source,
+                cannot_apply_reason: if has_source {
+                    None
+                } else {
+                    Some(
+                        "Source directory not found. Set SPACEBOT_SRC_DIR or clone to ~/.spacebot-src."
+                            .to_string(),
+                    )
+                },
+                docker_image: None,
+            }
+        }
         Deployment::Hosted => ApplyCapability {
             can_apply: false,
             cannot_apply_reason: Some(
