@@ -2708,12 +2708,18 @@ impl SystemSecrets for MattermostConfig {
             SecretField {
                 toml_key: "token",
                 secret_name: "MATTERMOST_TOKEN",
-                instance_pattern: None,
+                instance_pattern: Some(InstancePattern {
+                    platform_prefix: "MATTERMOST",
+                    field_suffix: "TOKEN",
+                }),
             },
             SecretField {
                 toml_key: "base_url",
                 secret_name: "MATTERMOST_BASE_URL",
-                instance_pattern: None,
+                instance_pattern: Some(InstancePattern {
+                    platform_prefix: "MATTERMOST",
+                    field_suffix: "BASE_URL",
+                }),
             },
         ]
     }

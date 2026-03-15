@@ -429,8 +429,12 @@ impl Messaging for MattermostAdapter {
         let user_id: Arc<str> = me.id.clone().into();
         let username: Arc<str> = me.username.clone().into();
 
-        self.bot_user_id.set(user_id.clone()).ok();
-        self.bot_username.set(username.clone()).ok();
+        if self.bot_user_id.set(user_id.clone()).is_err() {
+            tracing::warn!(adapter = %self.runtime_key, "bot_user_id already initialized — start() called more than once");
+        }
+        if self.bot_username.set(username.clone()).is_err() {
+            tracing::warn!(adapter = %self.runtime_key, "bot_username already initialized — start() called more than once");
+        }
 
         tracing::info!(
             adapter = %self.runtime_key,
@@ -929,7 +933,7 @@ impl Messaging for MattermostAdapter {
 
     async fn shutdown(&self) -> crate::Result<()> {
         if let Some(tx) = self.shutdown_tx.write().await.take() {
-            let _ = tx.send(()).await;
+            tx.send(()).await.ok();
         }
 
         if let Some(handle) = self.ws_task.write().await.take() {
