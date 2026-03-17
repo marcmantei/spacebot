@@ -309,6 +309,7 @@ pub(super) struct TomlRegistryConfig {
     #[serde(default)]
     pub(super) exclude_patterns: Option<Vec<String>>,
     pub(super) notification_target: Option<String>,
+    pub(super) pr_conflict_check_interval_secs: Option<u64>,
 }
 
 #[derive(Deserialize, Default)]

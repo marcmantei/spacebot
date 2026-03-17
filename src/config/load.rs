@@ -1632,6 +1632,9 @@ impl Config {
                         notification_target: r
                             .notification_target
                             .or_else(|| base.notification_target.clone()),
+                        pr_conflict_check_interval_secs: r
+                            .pr_conflict_check_interval_secs
+                            .or(base.pr_conflict_check_interval_secs),
                     }
                 })
                 .unwrap_or_else(|| base_defaults.registry.clone()),

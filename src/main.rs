@@ -3379,6 +3379,22 @@ async fn initialize_agents(
             }
         }
 
+        // PR conflict checker: spawn background loop to detect conflicting PRs.
+        if let Some(webhook_config) = &config.messaging.webhook
+            && webhook_config.enabled
+        {
+            let conflict_store = agent.deps.registry_store.as_ref().clone();
+            let conflict_agent_id = agent_id.to_string();
+            let conflict_runtime_config = agent.deps.runtime_config.clone();
+            let webhook_port = webhook_config.port;
+            tokio::spawn(spacebot::registry::pr_conflicts::pr_conflict_check_loop(
+                conflict_store,
+                conflict_agent_id,
+                conflict_runtime_config,
+                webhook_port,
+            ));
+        }
+
         // Seed cron jobs from config into the database
         for cron_def in &agent.config.cron {
             let cron_config = spacebot::cron::CronConfig {

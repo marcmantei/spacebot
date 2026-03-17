@@ -1016,6 +1016,11 @@ pub struct RegistryConfig {
     /// Optional delivery target for notifications when repos are discovered/archived.
     /// Format: "adapter:target" (e.g., "telegram:1285309093", "discord:123456789").
     pub notification_target: Option<String>,
+    /// Interval in seconds for PR conflict checking (default: 600 = 10 minutes).
+    /// Set to 0 to disable. When enabled, open PRs across registered repos are
+    /// polled for merge conflicts. Conflicting PRs trigger a message to the
+    /// channel agent which spawns a worker to resolve them.
+    pub pr_conflict_check_interval_secs: Option<u64>,
 }
 
 impl Default for RegistryConfig {
@@ -1028,6 +1033,7 @@ impl Default for RegistryConfig {
             auto_clone: false,
             exclude_patterns: Vec::new(),
             notification_target: None,
+            pr_conflict_check_interval_secs: None,
         }
     }
 }
