@@ -1587,6 +1587,13 @@ async fn run(
         ArcSwap<std::collections::HashMap<String, Arc<spacebot::tasks::TaskStore>>>,
     > = Arc::new(ArcSwap::from_pointee(std::collections::HashMap::new()));
 
+    // Instance-level global task database. Shared across all agents with globally
+    // unique task numbers. Lives alongside secrets.redb in the instance data dir.
+    let global_task_pool = spacebot::db::connect_global_tasks(&config.instance_dir.join("data"))
+        .await
+        .context("failed to initialize global task database")?;
+    let _global_task_store = Arc::new(spacebot::tasks::TaskStore::new(global_task_pool));
+
     // Start HTTP API server if enabled
     let mut api_state = spacebot::api::ApiState::new_with_provider_sender(
         provider_tx,
