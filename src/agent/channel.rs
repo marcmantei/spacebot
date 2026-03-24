@@ -1092,7 +1092,7 @@ impl Channel {
     fn is_dm(&self) -> bool {
         self.conversation_id
             .as_deref()
-            .map_or(false, is_dm_conversation_id)
+            .is_some_and(is_dm_conversation_id)
     }
 
     /// Update the coalesce deadline based on buffer size and config.
@@ -1367,7 +1367,7 @@ impl Channel {
             }
         }
 
-        if self.listen_only_mode && !batch_has_invoke {
+        if self.listen_only_mode && !batch_has_invoke && !self.is_dm() {
             tracing::debug!(
                 channel_id = %self.id,
                 message_count,
