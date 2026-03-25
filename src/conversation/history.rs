@@ -244,7 +244,7 @@ impl ConversationLogger {
 }
 
 /// A unified timeline item combining messages, branch runs, and worker runs.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TimelineItem {
     Message {

@@ -32,9 +32,9 @@ interface SidebarProps {
 
 interface SortableAgentItemProps {
 	agentId: string;
-	displayName?: string;
-	gradientStart?: string;
-	gradientEnd?: string;
+	displayName?: string | null | undefined;
+	gradientStart?: string | null | undefined;
+	gradientEnd?: string | null | undefined;
 	isActive: boolean;
 }
 
@@ -98,12 +98,12 @@ export function Sidebar({ liveStates: _liveStates }: SidebarProps) {
 
 	const agentIds = useMemo(() => agents.map((a) => a.id), [agents]);
 	const agentDisplayNames = useMemo(() => {
-		const map: Record<string, string | undefined> = {};
+		const map: Record<string, string | null | undefined> = {};
 		for (const a of agents) map[a.id] = a.display_name;
 		return map;
 	}, [agents]);
 	const agentGradients = useMemo(() => {
-		const map: Record<string, { start?: string; end?: string }> = {};
+		const map: Record<string, { start?: string | null | undefined; end?: string | null | undefined }> = {};
 		for (const a of agents) map[a.id] = { start: a.gradient_start, end: a.gradient_end };
 		return map;
 	}, [agents]);

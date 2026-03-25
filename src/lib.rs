@@ -35,6 +35,14 @@ pub mod update;
 
 pub use error::{Error, Result};
 
+/// Generate the OpenAPI JSON specification.
+/// This function is called by the `openapi-spec` binary.
+pub fn openapi_json() -> anyhow::Result<String> {
+    let (_, api) = api::api_router().split_for_parts();
+    api.to_json()
+        .map_err(|e| anyhow::anyhow!("Failed to serialize OpenAPI spec: {}", e))
+}
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

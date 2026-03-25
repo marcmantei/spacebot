@@ -785,7 +785,7 @@ impl Default for IngestionConfig {
 }
 
 /// What happens when a worker explicitly calls "close" on the browser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ClosePolicy {
     /// Kill the browser process and reset all state (current default behavior).
@@ -1059,7 +1059,7 @@ impl Default for ProjectsConfig {
 }
 
 /// Current warmup lifecycle state.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WarmupState {
     Cold,
@@ -1069,7 +1069,7 @@ pub enum WarmupState {
 }
 
 /// Warmup runtime status snapshot for API and observability.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct WarmupStatus {
     pub state: WarmupState,
     pub embedding_ready: bool,

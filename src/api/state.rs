@@ -29,7 +29,7 @@ use std::time::Instant;
 use tokio::sync::{RwLock, broadcast, mpsc};
 
 /// Summary of an agent's configuration, exposed via the API.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct AgentInfo {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -40,7 +40,7 @@ pub struct AgentInfo {
     pub gradient_start: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gradient_end: Option<String>,
-    pub workspace: PathBuf,
+    pub workspace: String,
     pub context_window: usize,
     pub max_turns: usize,
     pub max_concurrent_branches: usize,
@@ -143,7 +143,7 @@ pub struct ApiState {
 }
 
 /// Events sent to SSE clients. Wraps ProcessEvents with agent context.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ApiEvent {
     /// An inbound message from a user.

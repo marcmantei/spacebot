@@ -10,7 +10,7 @@ use std::sync::Arc;
 // Request / response types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub(super) struct TaskListQuery {
     /// Convenience filter: matches tasks where owner OR assigned equals this value.
     #[serde(default)]
@@ -31,7 +31,7 @@ pub(super) struct TaskListQuery {
     limit: i64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateTaskRequest {
     /// Agent that owns (created) this task.
     owner_agent_id: String,
@@ -55,7 +55,7 @@ pub(super) struct CreateTaskRequest {
     created_by: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateTaskRequest {
     #[serde(default)]
     title: Option<String>,
@@ -79,28 +79,28 @@ pub(super) struct UpdateTaskRequest {
     approved_by: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct ApproveRequest {
     #[serde(default)]
     approved_by: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct AssignRequest {
     assigned_agent_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct TaskListResponse {
     tasks: Vec<crate::tasks::Task>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct TaskResponse {
     task: crate::tasks::Task,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct TaskActionResponse {
     success: bool,
     message: String,
@@ -159,6 +159,16 @@ fn emit_task_event(state: &ApiState, task: &crate::tasks::Task, action: &str) {
 // ---------------------------------------------------------------------------
 
 /// `GET /tasks` — list tasks with optional filters.
+#[utoipa::path(
+    get,
+    path = "/tasks",
+    params(TaskListQuery),
+    responses(
+        (status = 200, body = TaskListResponse),
+        (status = 503, description = "Task store not initialized"),
+    ),
+    tag = "tasks",
+)]
 pub(super) async fn list_tasks(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<TaskListQuery>,
@@ -188,6 +198,19 @@ pub(super) async fn list_tasks(
 }
 
 /// `GET /tasks/{number}` — get a task by globally unique number.
+#[utoipa::path(
+    get,
+    path = "/tasks/{number}",
+    params(
+        ("number" = i64, Path, description = "Task number"),
+    ),
+    responses(
+        (status = 200, body = TaskResponse),
+        (status = 404, description = "Task not found"),
+        (status = 503, description = "Task store not initialized"),
+    ),
+    tag = "tasks",
+)]
 pub(super) async fn get_task(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
@@ -207,6 +230,17 @@ pub(super) async fn get_task(
 }
 
 /// `POST /tasks` — create a task.
+#[utoipa::path(
+    post,
+    path = "/tasks",
+    request_body = CreateTaskRequest,
+    responses(
+        (status = 200, body = TaskResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 503, description = "Task store not initialized"),
+    ),
+    tag = "tasks",
+)]
 pub(super) async fn create_task(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<CreateTaskRequest>,
@@ -246,6 +280,21 @@ pub(super) async fn create_task(
 }
 
 /// `PUT /tasks/{number}` — update a task.
+#[utoipa::path(
+    put,
+    path = "/tasks/{number}",
+    params(
+        ("number" = i64, Path, description = "Task number"),
+    ),
+    request_body = UpdateTaskRequest,
+    responses(
+        (status = 200, body = TaskResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 404, description = "Task not found"),
+        (status = 503, description = "Task store not initialized"),
+    ),
+    tag = "tasks",
+)]
 pub(super) async fn update_task(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
@@ -285,6 +334,19 @@ pub(super) async fn update_task(
 }
 
 /// `DELETE /tasks/{number}` — delete a task.
+#[utoipa::path(
+    delete,
+    path = "/tasks/{number}",
+    params(
+        ("number" = i64, Path, description = "Task number"),
+    ),
+    responses(
+        (status = 200, body = TaskActionResponse),
+        (status = 404, description = "Task not found"),
+        (status = 503, description = "Task store not initialized"),
+    ),
+    tag = "tasks",
+)]
 pub(super) async fn delete_task(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
@@ -327,6 +389,20 @@ pub(super) async fn delete_task(
 }
 
 /// `POST /tasks/{number}/approve` — approve a task (move to ready).
+#[utoipa::path(
+    post,
+    path = "/tasks/{number}/approve",
+    params(
+        ("number" = i64, Path, description = "Task number"),
+    ),
+    request_body = ApproveRequest,
+    responses(
+        (status = 200, body = TaskResponse),
+        (status = 404, description = "Task not found"),
+        (status = 503, description = "Task store not initialized"),
+    ),
+    tag = "tasks",
+)]
 pub(super) async fn approve_task(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
@@ -356,6 +432,21 @@ pub(super) async fn approve_task(
 
 /// `POST /tasks/{number}/execute` — move a task to ready for execution.
 /// Tasks already in `ready` or `in_progress` are returned as-is.
+#[utoipa::path(
+    post,
+    path = "/tasks/{number}/execute",
+    params(
+        ("number" = i64, Path, description = "Task number"),
+    ),
+    request_body = ApproveRequest,
+    responses(
+        (status = 200, body = TaskResponse),
+        (status = 404, description = "Task not found"),
+        (status = 409, description = "Task pending approval"),
+        (status = 503, description = "Task store not initialized"),
+    ),
+    tag = "tasks",
+)]
 pub(super) async fn execute_task(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
@@ -405,6 +496,20 @@ pub(super) async fn execute_task(
 }
 
 /// `POST /tasks/{number}/assign` — reassign a task to a different agent.
+#[utoipa::path(
+    post,
+    path = "/tasks/{number}/assign",
+    params(
+        ("number" = i64, Path, description = "Task number"),
+    ),
+    request_body = AssignRequest,
+    responses(
+        (status = 200, body = TaskResponse),
+        (status = 404, description = "Task not found"),
+        (status = 503, description = "Task store not initialized"),
+    ),
+    tag = "tasks",
+)]
 pub(super) async fn assign_task(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,

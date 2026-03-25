@@ -18,7 +18,7 @@ export function GlobalTasks() {
   const effectiveOwner = selectedOwnerId ?? agents[0]?.id;
 
   const agentNames = useMemo(() => {
-    const map: Record<string, string | undefined> = {};
+    const map: Record<string, string | null | undefined> = {};
     for (const agent of agents) {
       map[agent.id] = agent.display_name;
     }

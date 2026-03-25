@@ -9,13 +9,13 @@ use std::sync::Arc;
 // Re-export E.164 validation from messaging target module
 pub use crate::messaging::target::is_valid_e164;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, utoipa::ToSchema)]
 pub(super) struct PlatformStatus {
     configured: bool,
     enabled: bool,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, utoipa::ToSchema)]
 pub(super) struct AdapterInstanceStatus {
     platform: String,
     /// `None` means the default instance for the platform.
@@ -26,7 +26,7 @@ pub(super) struct AdapterInstanceStatus {
     binding_count: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct MessagingStatusResponse {
     discord: PlatformStatus,
     slack: PlatformStatus,
@@ -39,14 +39,14 @@ pub(super) struct MessagingStatusResponse {
     instances: Vec<AdapterInstanceStatus>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct DisconnectPlatformRequest {
     platform: String,
     #[serde(default)]
     adapter: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct TogglePlatformRequest {
     platform: String,
     #[serde(default)]
@@ -54,7 +54,7 @@ pub(super) struct TogglePlatformRequest {
     enabled: bool,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, utoipa::ToSchema)]
 pub(super) struct InstanceCredentials {
     #[serde(default)]
     discord_token: Option<String>,
@@ -114,7 +114,7 @@ pub(super) struct InstanceCredentials {
     signal_dm_allowed_users: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateMessagingInstanceRequest {
     platform: String,
     #[serde(default)]
@@ -125,14 +125,14 @@ pub(super) struct CreateMessagingInstanceRequest {
     credentials: InstanceCredentials,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct DeleteMessagingInstanceRequest {
     platform: String,
     #[serde(default)]
     name: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct MessagingInstanceActionResponse {
     success: bool,
     message: String,
@@ -349,6 +349,15 @@ fn parse_signal_credentials(
 }
 
 /// Get which messaging platforms are configured and enabled.
+#[utoipa::path(
+    get,
+    path = "/messaging/status",
+    responses(
+        (status = 200, body = MessagingStatusResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "messaging",
+)]
 pub(super) async fn messaging_status(
     State(state): State<Arc<ApiState>>,
 ) -> Result<Json<MessagingStatusResponse>, StatusCode> {
@@ -909,6 +918,16 @@ pub(super) async fn messaging_status(
 /// When `adapter` is set, only the specified named instance is disconnected.
 /// When `adapter` is absent, the entire platform section (default + all named
 /// instances) is removed.
+#[utoipa::path(
+    post,
+    path = "/messaging/disconnect",
+    request_body = DisconnectPlatformRequest,
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "messaging",
+)]
 pub(super) async fn disconnect_platform(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<DisconnectPlatformRequest>,
@@ -1091,6 +1110,16 @@ pub(super) async fn disconnect_platform(
 
 /// Toggle a messaging platform's enabled state. When disabling, shuts down the
 /// adapter. When enabling, reads credentials from config and hot-starts it.
+#[utoipa::path(
+    post,
+    path = "/messaging/toggle",
+    request_body = TogglePlatformRequest,
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "messaging",
+)]
 pub(super) async fn toggle_platform(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<TogglePlatformRequest>,
@@ -1580,6 +1609,16 @@ pub(super) async fn toggle_platform(
 /// If `name` is `None`, creates/updates the default instance (root-level credentials).
 /// If `name` is `Some`, adds a `[[messaging.<platform>.instances]]` entry.
 /// Starts the adapter at runtime and reloads bindings.
+#[utoipa::path(
+    post,
+    path = "/messaging/instances",
+    request_body = CreateMessagingInstanceRequest,
+    responses(
+        (status = 200, body = MessagingInstanceActionResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "messaging",
+)]
 pub(super) async fn create_messaging_instance(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<CreateMessagingInstanceRequest>,
@@ -2022,6 +2061,16 @@ pub(super) async fn create_messaging_instance(
 ///
 /// Removes the instance entry from config.toml, removes bindings targeting
 /// that adapter, and shuts down the runtime adapter.
+#[utoipa::path(
+    delete,
+    path = "/messaging/instances",
+    request_body = DeleteMessagingInstanceRequest,
+    responses(
+        (status = 200, body = MessagingInstanceActionResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "messaging",
+)]
 pub(super) async fn delete_messaging_instance(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<DeleteMessagingInstanceRequest>,

@@ -193,7 +193,7 @@ export interface TaskBoardProps {
   /** Agent ID used as owner when creating tasks. Required for create to work. */
   ownerAgentId?: string;
   /** Optional agent name resolver for showing agent badges on cards. */
-  agentNames?: Record<string, string | undefined>;
+  agentNames?: Record<string, string | null | undefined>;
   /** Whether to show agent badges on task cards (useful in global view). */
   showAgentBadge?: boolean;
 }
@@ -418,7 +418,7 @@ function KanbanColumn({
   label: string;
   tasks: TaskItem[];
   showAgentBadge?: boolean;
-  agentNames?: Record<string, string | undefined>;
+  agentNames?: Record<string, string | null | undefined>;
   onSelect: (task: TaskItem) => void;
   onApprove: (task: TaskItem) => void;
   onExecute: (task: TaskItem) => void;
@@ -475,7 +475,7 @@ function TaskCard({
 }: {
   task: TaskItem;
   showAgentBadge?: boolean;
-  agentNames?: Record<string, string | undefined>;
+  agentNames?: Record<string, string | null | undefined>;
   onSelect: () => void;
   onApprove: () => void;
   onExecute: () => void;
@@ -701,7 +701,7 @@ function TaskDetailDialog({
   onStatusChange,
 }: {
   task: TaskItem;
-  agentNames?: Record<string, string | undefined>;
+  agentNames?: Record<string, string | null | undefined>;
   showAgentBadge?: boolean;
   onClose: () => void;
   onApprove: () => void;

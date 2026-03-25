@@ -23,12 +23,12 @@ fn hosted_agent_limit() -> Option<usize> {
         .filter(|value| *value > 0)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct AgentsResponse {
     agents: Vec<AgentInfo>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct AgentOverviewResponse {
     memory_counts: HashMap<String, i64>,
     memory_total: i64,
@@ -42,27 +42,27 @@ pub(super) struct AgentOverviewResponse {
     latest_bulletin: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct DayCount {
     date: String,
     count: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct ActivityDayCount {
     date: String,
     branches: i64,
     workers: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct HeatmapCell {
     day: i64,
     hour: i64,
     count: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct CronJobInfo {
     id: String,
     prompt: String,
@@ -75,7 +75,7 @@ struct CronJobInfo {
     timeout_secs: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct InstanceOverviewResponse {
     version: &'static str,
     uptime_seconds: u64,
@@ -83,7 +83,7 @@ pub(super) struct InstanceOverviewResponse {
     agents: Vec<AgentSummary>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct AgentSummary {
     id: String,
     channel_count: usize,
@@ -95,24 +95,24 @@ struct AgentSummary {
     profile: Option<crate::agent::cortex::AgentProfile>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct AgentProfileResponse {
     profile: Option<crate::agent::cortex::AgentProfile>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct IdentityResponse {
     soul: Option<String>,
     identity: Option<String>,
     role: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct IdentityQuery {
     agent_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct IdentityUpdateRequest {
     agent_id: String,
     soul: Option<String>,
@@ -120,12 +120,12 @@ pub(super) struct IdentityUpdateRequest {
     role: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct AgentOverviewQuery {
     agent_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateAgentRequest {
     pub agent_id: String,
     pub display_name: Option<String>,
@@ -139,7 +139,7 @@ pub struct CreateAgentResult {
     pub message: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateAgentRequest {
     agent_id: String,
     display_name: Option<String>,
@@ -148,51 +148,51 @@ pub(super) struct UpdateAgentRequest {
     gradient_end: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct DeleteAgentQuery {
     agent_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct AgentMcpQuery {
     agent_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct ReconnectMcpRequest {
     agent_id: String,
     server_name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct AgentMcpResponse {
     servers: Vec<crate::mcp::McpServerStatus>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct WarmupQuery {
     agent_id: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct WarmupTriggerRequest {
     agent_id: Option<String>,
     #[serde(default)]
     force: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct WarmupStatusEntry {
     agent_id: String,
     status: crate::config::WarmupStatus,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct WarmupStatusResponse {
     statuses: Vec<WarmupStatusEntry>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct WarmupTriggerResponse {
     status: &'static str,
     forced: bool,
@@ -272,6 +272,14 @@ fn resolve_warmup_agent_ids(
 }
 
 /// List all configured agents with their config summaries.
+#[utoipa::path(
+    get,
+    path = "/agents",
+    responses(
+        (status = 200, body = AgentsResponse),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn list_agents(State(state): State<Arc<ApiState>>) -> Json<AgentsResponse> {
     let agents = state.agent_configs.load();
     Json(AgentsResponse {
@@ -280,6 +288,18 @@ pub(super) async fn list_agents(State(state): State<Arc<ApiState>>) -> Json<Agen
 }
 
 /// List MCP connection status for an agent.
+#[utoipa::path(
+    get,
+    path = "/agents/mcp",
+    params(
+        ("agent_id" = String, Query, description = "Agent ID"),
+    ),
+    responses(
+        (status = 200, body = AgentMcpResponse),
+        (status = 404, description = "Agent not found"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn list_agent_mcp(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<AgentMcpQuery>,
@@ -294,6 +314,17 @@ pub(super) async fn list_agent_mcp(
 }
 
 /// Force reconnect for a single MCP server on an agent.
+#[utoipa::path(
+    post,
+    path = "/agents/mcp/reconnect",
+    request_body = ReconnectMcpRequest,
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 404, description = "Agent not found"),
+        (status = 400, description = "Failed to reconnect"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn reconnect_agent_mcp(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<ReconnectMcpRequest>,
@@ -325,6 +356,18 @@ pub(super) async fn reconnect_agent_mcp(
 }
 
 /// Get warmup status for one agent or all agents.
+#[utoipa::path(
+    get,
+    path = "/agents/warmup",
+    params(
+        ("agent_id" = Option<String>, Query, description = "Optional agent ID to get status for a specific agent"),
+    ),
+    responses(
+        (status = 200, body = WarmupStatusResponse),
+        (status = 404, description = "Agent not found"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn get_warmup_status(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<WarmupQuery>,
@@ -354,6 +397,17 @@ pub(super) async fn get_warmup_status(
 }
 
 /// Trigger warmup for one agent or all agents.
+#[utoipa::path(
+    post,
+    path = "/agents/warmup/trigger",
+    request_body = WarmupTriggerRequest,
+    responses(
+        (status = 200, body = WarmupTriggerResponse),
+        (status = 503, description = "LLM manager not available"),
+        (status = 404, description = "Agent not found"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn trigger_warmup(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<WarmupTriggerRequest>,
@@ -462,6 +516,18 @@ pub(super) async fn trigger_warmup(
 }
 
 /// Create a new agent and initialize it live (directories, databases, memory, identity, cron, cortex).
+#[utoipa::path(
+    post,
+    path = "/agents",
+    request_body = CreateAgentRequest,
+    responses(
+        (status = 201, body = serde_json::Value, description = "Agent created successfully"),
+        (status = 400, description = "Invalid request or agent limit reached"),
+        (status = 409, description = "Agent already exists"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn create_agent(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<CreateAgentRequest>,
@@ -995,7 +1061,7 @@ pub async fn create_agent_internal(
             role: agent_config.role.clone(),
             gradient_start: agent_config.gradient_start.clone(),
             gradient_end: agent_config.gradient_end.clone(),
-            workspace: agent_config.workspace.clone(),
+            workspace: agent_config.workspace.to_string_lossy().to_string(),
             context_window: agent_config.context_window,
             max_turns: agent_config.max_turns,
             max_concurrent_branches: agent_config.max_concurrent_branches,
@@ -1032,6 +1098,18 @@ pub async fn create_agent_internal(
 }
 
 /// Update an agent's display_name and role in config.toml.
+#[utoipa::path(
+    put,
+    path = "/agents",
+    request_body = UpdateAgentRequest,
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 404, description = "Agent not found"),
+        (status = 400, description = "Invalid request"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn update_agent(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<UpdateAgentRequest>,
@@ -1157,6 +1235,19 @@ pub(super) async fn update_agent(
 }
 
 /// Delete an agent: remove from config.toml, clean up API state, signal main loop.
+#[utoipa::path(
+    delete,
+    path = "/agents",
+    params(
+        ("agent_id" = String, Query, description = "Agent ID to delete"),
+    ),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 400, description = "Invalid request"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn delete_agent(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<DeleteAgentQuery>,
@@ -1313,6 +1404,19 @@ pub(super) async fn delete_agent(
 }
 
 /// Get overview stats for an agent: memory breakdown, channels, cron, cortex.
+#[utoipa::path(
+    get,
+    path = "/agents/overview",
+    params(
+        ("agent_id" = String, Query, description = "Agent ID"),
+    ),
+    responses(
+        (status = 200, body = AgentOverviewResponse),
+        (status = 404, description = "Agent not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn agent_overview(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<AgentOverviewQuery>,
@@ -1488,6 +1592,14 @@ pub(super) async fn agent_overview(
 }
 
 /// Get instance-wide overview for the main dashboard.
+#[utoipa::path(
+    get,
+    path = "/agents/instance",
+    responses(
+        (status = 200, body = InstanceOverviewResponse),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn instance_overview(
     State(state): State<Arc<ApiState>>,
 ) -> Result<Json<InstanceOverviewResponse>, StatusCode> {
@@ -1589,6 +1701,18 @@ pub(super) async fn instance_overview(
 }
 
 /// Get the cortex-generated profile for an agent.
+#[utoipa::path(
+    get,
+    path = "/agents/profile",
+    params(
+        ("agent_id" = String, Query, description = "Agent ID"),
+    ),
+    responses(
+        (status = 200, body = AgentProfileResponse),
+        (status = 404, description = "Agent not found"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn get_agent_profile(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<AgentOverviewQuery>,
@@ -1602,6 +1726,18 @@ pub(super) async fn get_agent_profile(
 }
 
 /// Get identity files (SOUL.md, IDENTITY.md, ROLE.md) for an agent.
+#[utoipa::path(
+    get,
+    path = "/agents/identity",
+    params(
+        ("agent_id" = String, Query, description = "Agent ID"),
+    ),
+    responses(
+        (status = 200, body = IdentityResponse),
+        (status = 404, description = "Agent not found"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn get_identity(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<IdentityQuery>,
@@ -1622,6 +1758,17 @@ pub(super) async fn get_identity(
 
 /// Update identity files for an agent. Only writes files for fields that are present.
 /// The file watcher will pick up changes and hot-reload identity into RuntimeConfig.
+#[utoipa::path(
+    put,
+    path = "/agents/identity",
+    request_body = IdentityUpdateRequest,
+    responses(
+        (status = 200, body = IdentityResponse),
+        (status = 404, description = "Agent not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn update_identity(
     State(state): State<Arc<ApiState>>,
     axum::Json(request): axum::Json<IdentityUpdateRequest>,
@@ -1855,6 +2002,18 @@ pub(super) struct AvatarQuery {
 }
 
 /// Serve the agent's avatar image.
+#[utoipa::path(
+    get,
+    path = "/agents/avatar",
+    params(
+        ("agent_id" = String, Query, description = "Agent ID"),
+    ),
+    responses(
+        (status = 200, description = "Avatar image"),
+        (status = 404, description = "Avatar or agent not found"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn get_avatar(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<AvatarQuery>,
@@ -1891,6 +2050,21 @@ pub(super) async fn get_avatar(
 use axum::response::IntoResponse;
 
 /// Upload (or replace) the agent's avatar image.
+#[utoipa::path(
+    post,
+    path = "/agents/avatar",
+    params(
+        ("agent_id" = String, Query, description = "Agent ID"),
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Avatar uploaded successfully"),
+        (status = 400, description = "Unsupported image type"),
+        (status = 404, description = "Agent not found"),
+        (status = 413, description = "Payload too large"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn upload_avatar(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<AvatarQuery>,
@@ -1948,6 +2122,18 @@ pub(super) async fn upload_avatar(
 }
 
 /// Delete the agent's avatar image.
+#[utoipa::path(
+    delete,
+    path = "/agents/avatar",
+    params(
+        ("agent_id" = String, Query, description = "Agent ID"),
+    ),
+    responses(
+        (status = 200, body = serde_json::Value),
+        (status = 404, description = "Agent not found"),
+    ),
+    tag = "agents",
+)]
 pub(super) async fn delete_avatar(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<AvatarQuery>,

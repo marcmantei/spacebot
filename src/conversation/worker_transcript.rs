@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 const MAX_TOOL_ARGS_BYTES: usize = 2_000;
 
 /// A single step in a worker transcript.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TranscriptStep {
     /// Agent reasoning and/or tool calls.
@@ -40,7 +40,7 @@ pub enum TranscriptStep {
 }
 
 /// Content within an action step.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActionContent {
     Text {
