@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  useDroppable,
+  useDraggable,
+  closestCorners,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
   api,
   type TaskItem,
   type TaskStatus,
@@ -20,6 +32,7 @@ import {
 import { Markdown } from "@/components/Markdown";
 import { formatTimeAgo } from "@/lib/format";
 import { AnimatePresence, motion } from "framer-motion";
+import { cx } from "@/ui/utils";
 
 const COLUMNS: { status: TaskStatus; label: string }[] = [
   { status: "pending_approval", label: "Pending Approval" },
@@ -57,9 +70,17 @@ const PRIORITY_COLORS: Record<
   low: "outline",
 };
 
+// Left-border accent colors by priority — applied as a colored left strip
+const PRIORITY_BORDER: Record<TaskPriority, string> = {
+  critical: "border-l-red-500",
+  high: "border-l-amber-500",
+  medium: "border-l-transparent",
+  low: "border-l-transparent",
+};
+
 export function AgentTasks({ agentId }: { agentId: string }) {
   const queryClient = useQueryClient();
-  const { taskEventVersion } = useLiveContext();
+  const { taskEventVersion, activeWorkers } = useLiveContext();
 
   // Invalidate on SSE task events
   const prevVersion = useRef(taskEventVersion);
@@ -100,6 +121,12 @@ export function AgentTasks({ agentId }: { agentId: string }) {
     selectedTaskNumber !== null
       ? (tasks.find((t) => t.task_number === selectedTaskNumber) ?? null)
       : null;
+
+  // Track which card is currently being dragged (for DragOverlay)
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const draggingTask = draggingTaskId
+    ? (tasks.find((t) => t.id === draggingTaskId) ?? null)
+    : null;
 
   const createMutation = useMutation({
     mutationFn: (request: CreateTaskRequest) =>
@@ -147,6 +174,57 @@ export function AgentTasks({ agentId }: { agentId: string }) {
     },
   });
 
+  // DnD sensors — require 8px movement to start drag (prevents accidental drags on click)
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+  );
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setDraggingTaskId(event.active.id as string);
+  }, []);
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      setDraggingTaskId(null);
+      const { active, over } = event;
+      if (!over) return;
+
+      const taskId = active.id as string;
+      const newStatus = over.id as TaskStatus;
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task || task.status === newStatus) return;
+
+      // Optimistic update: move card immediately in the UI
+      queryClient.setQueryData(["tasks", agentId], (old: any) => {
+        if (!old) return old;
+        return {
+          ...old,
+          tasks: old.tasks.map((t: TaskItem) =>
+            t.id === taskId ? { ...t, status: newStatus } : t,
+          ),
+        };
+      });
+
+      updateMutation.mutate(
+        { taskNumber: task.task_number, status: newStatus },
+        {
+          onError: () => {
+            // Revert on failure
+            queryClient.invalidateQueries({ queryKey: ["tasks", agentId] });
+          },
+        },
+      );
+    },
+    [tasks, agentId, queryClient, updateMutation],
+  );
+
+  // Collect active worker IDs for the current agent
+  const activeWorkerIds = new Set(
+    Object.values(activeWorkers)
+      .filter((w) => (w as any).agentId === agentId)
+      .map((w) => w.id),
+  );
+
   if (isLoading) {
     return (
       <div className="flex h-full items-center justify-center text-ink-faint">
@@ -156,75 +234,99 @@ export function AgentTasks({ agentId }: { agentId: string }) {
   }
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between border-b border-app-line px-4 py-2">
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-ink-dull">
-            {tasks.length} task{tasks.length !== 1 ? "s" : ""}
-          </span>
-          {tasksByStatus.pending_approval.length > 0 && (
-            <Badge variant="amber" size="sm">
-              {tasksByStatus.pending_approval.length} pending approval
-            </Badge>
-          )}
-          {tasksByStatus.in_progress.length > 0 && (
-            <Badge variant="violet" size="sm">
-              {tasksByStatus.in_progress.length} in progress
-            </Badge>
-          )}
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCorners}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+    >
+      <div className="flex h-full flex-col">
+        {/* Toolbar */}
+        <div className="flex items-center justify-between border-b border-app-line px-4 py-2">
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-ink-dull">
+              {tasks.length} task{tasks.length !== 1 ? "s" : ""}
+            </span>
+            {tasksByStatus.pending_approval.length > 0 && (
+              <Badge variant="amber" size="sm">
+                {tasksByStatus.pending_approval.length} pending approval
+              </Badge>
+            )}
+            {tasksByStatus.in_progress.length > 0 && (
+              <Badge variant="violet" size="sm">
+                {tasksByStatus.in_progress.length} in progress
+              </Badge>
+            )}
+          </div>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            Create Task
+          </Button>
         </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          Create Task
-        </Button>
-      </div>
 
-      {/* Kanban Board */}
-      <div className="flex flex-1 flex-wrap content-start gap-3 overflow-y-auto p-4">
-        {COLUMNS.map(({ status, label }) => (
-          <KanbanColumn
-            key={status}
-            status={status}
-            label={label}
-            tasks={tasksByStatus[status]}
-            onSelect={(task) => setSelectedTaskNumber(task.task_number)}
-            onApprove={(task) => approveMutation.mutate(task.task_number)}
-            onExecute={(task) => executeMutation.mutate(task.task_number)}
-            onStatusChange={(task, newStatus) =>
+        {/* Kanban Board */}
+        <div className="flex flex-1 flex-wrap content-start gap-3 overflow-y-auto p-4">
+          {COLUMNS.map(({ status, label }) => (
+            <KanbanColumn
+              key={status}
+              status={status}
+              label={label}
+              tasks={tasksByStatus[status]}
+              isDragging={draggingTaskId !== null}
+              activeWorkerIds={activeWorkerIds}
+              onSelect={(task) => setSelectedTaskNumber(task.task_number)}
+              onApprove={(task) => approveMutation.mutate(task.task_number)}
+              onExecute={(task) => executeMutation.mutate(task.task_number)}
+              onStatusChange={(task, newStatus) =>
+                updateMutation.mutate({
+                  taskNumber: task.task_number,
+                  status: newStatus,
+                })
+              }
+            />
+          ))}
+        </div>
+
+        {/* Drag overlay — shows a ghost card while dragging */}
+        <DragOverlay dropAnimation={{ duration: 150, easing: "ease-out" }}>
+          {draggingTask ? (
+            <TaskCard
+              task={draggingTask}
+              isOverlay
+              activeWorkerIds={activeWorkerIds}
+              onSelect={() => {}}
+              onApprove={() => {}}
+              onExecute={() => {}}
+              onStatusChange={() => {}}
+            />
+          ) : null}
+        </DragOverlay>
+
+        {/* Create Dialog */}
+        <CreateTaskDialog
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          onCreate={(request) => createMutation.mutate(request)}
+          isPending={createMutation.isPending}
+        />
+
+        {/* Detail Dialog */}
+        {selectedTask && (
+          <TaskDetailDialog
+            task={selectedTask}
+            onClose={() => setSelectedTaskNumber(null)}
+            onApprove={() => approveMutation.mutate(selectedTask.task_number)}
+            onExecute={() => executeMutation.mutate(selectedTask.task_number)}
+            onDelete={() => deleteMutation.mutate(selectedTask.task_number)}
+            onStatusChange={(status) =>
               updateMutation.mutate({
-                taskNumber: task.task_number,
-                status: newStatus,
+                taskNumber: selectedTask.task_number,
+                status,
               })
             }
           />
-        ))}
+        )}
       </div>
-
-      {/* Create Dialog */}
-      <CreateTaskDialog
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreate={(request) => createMutation.mutate(request)}
-        isPending={createMutation.isPending}
-      />
-
-      {/* Detail Dialog */}
-      {selectedTask && (
-        <TaskDetailDialog
-          task={selectedTask}
-          onClose={() => setSelectedTaskNumber(null)}
-          onApprove={() => approveMutation.mutate(selectedTask.task_number)}
-          onExecute={() => executeMutation.mutate(selectedTask.task_number)}
-          onDelete={() => deleteMutation.mutate(selectedTask.task_number)}
-          onStatusChange={(status) =>
-            updateMutation.mutate({
-              taskNumber: selectedTask.task_number,
-              status,
-            })
-          }
-        />
-      )}
-    </div>
+    </DndContext>
   );
 }
 
@@ -234,6 +336,8 @@ function KanbanColumn({
   status,
   label,
   tasks,
+  isDragging,
+  activeWorkerIds,
   onSelect,
   onApprove,
   onExecute,
@@ -242,13 +346,27 @@ function KanbanColumn({
   status: TaskStatus;
   label: string;
   tasks: TaskItem[];
+  isDragging: boolean;
+  activeWorkerIds: Set<string>;
   onSelect: (task: TaskItem) => void;
   onApprove: (task: TaskItem) => void;
   onExecute: (task: TaskItem) => void;
   onStatusChange: (task: TaskItem, status: TaskStatus) => void;
 }) {
+  const { setNodeRef, isOver } = useDroppable({ id: status });
+
   return (
-    <div className="flex min-h-0 min-w-[14rem] flex-1 basis-[14rem] flex-col rounded-lg border border-app-line/50 bg-app-darkBox/20">
+    <div
+      ref={setNodeRef}
+      className={cx(
+        "flex min-h-0 min-w-[14rem] flex-1 basis-[14rem] flex-col rounded-lg border bg-app-darkBox/20 transition-colors",
+        isOver
+          ? "border-accent/60 bg-accent/5"
+          : isDragging
+            ? "border-app-line/60 bg-app-darkBox/30"
+            : "border-app-line/50",
+      )}
+    >
       {/* Column Header */}
       <div className="flex items-center gap-2 border-b border-app-line/30 px-3 py-2">
         <Badge variant={STATUS_COLORS[status]} size="sm">
@@ -261,9 +379,10 @@ function KanbanColumn({
       <div className="flex-1 space-y-2 overflow-y-auto p-2">
         <AnimatePresence mode="popLayout">
           {tasks.map((task) => (
-            <TaskCard
+            <DraggableTaskCard
               key={task.id}
               task={task}
+              activeWorkerIds={activeWorkerIds}
               onSelect={() => onSelect(task)}
               onApprove={() => onApprove(task)}
               onExecute={() => onExecute(task)}
@@ -272,8 +391,13 @@ function KanbanColumn({
           ))}
         </AnimatePresence>
         {tasks.length === 0 && (
-          <div className="py-4 text-center text-tiny text-ink-faint">
-            No tasks
+          <div
+            className={cx(
+              "py-6 text-center text-tiny transition-colors",
+              isOver ? "text-accent/60" : "text-ink-faint",
+            )}
+          >
+            {isOver ? "Drop here" : "No tasks"}
           </div>
         )}
       </div>
@@ -281,16 +405,64 @@ function KanbanColumn({
   );
 }
 
-// -- Task Card --
+// -- Draggable wrapper for TaskCard --
 
-function TaskCard({
+function DraggableTaskCard({
   task,
+  activeWorkerIds,
   onSelect,
   onApprove,
   onExecute,
   onStatusChange,
 }: {
   task: TaskItem;
+  activeWorkerIds: Set<string>;
+  onSelect: () => void;
+  onApprove: () => void;
+  onExecute: () => void;
+  onStatusChange: (status: TaskStatus) => void;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: task.id,
+  });
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: isDragging ? 0.3 : 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      transition={{ duration: 0.15 }}
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+    >
+      <TaskCard
+        task={task}
+        activeWorkerIds={activeWorkerIds}
+        onSelect={onSelect}
+        onApprove={onApprove}
+        onExecute={onExecute}
+        onStatusChange={onStatusChange}
+      />
+    </motion.div>
+  );
+}
+
+// -- Task Card --
+
+function TaskCard({
+  task,
+  isOverlay = false,
+  activeWorkerIds,
+  onSelect,
+  onApprove,
+  onExecute,
+  onStatusChange,
+}: {
+  task: TaskItem;
+  isOverlay?: boolean;
+  activeWorkerIds: Set<string>;
   onSelect: () => void;
   onApprove: () => void;
   onExecute: () => void;
@@ -298,15 +470,19 @@ function TaskCard({
 }) {
   const subtasksDone = task.subtasks.filter((s) => s.completed).length;
   const subtasksTotal = task.subtasks.length;
+  const isWorkerActive = task.worker_id
+    ? activeWorkerIds.has(task.worker_id)
+    : false;
 
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      transition={{ duration: 0.15 }}
-      className="cursor-pointer rounded-md border border-app-line/30 bg-app p-3 transition-colors hover:border-app-line"
+    <div
+      className={cx(
+        "cursor-pointer rounded-md border border-l-2 bg-app p-3 transition-all",
+        PRIORITY_BORDER[task.priority],
+        isOverlay
+          ? "rotate-1 scale-105 border-app-line/50 shadow-xl"
+          : "border-app-line/30 hover:-translate-y-0.5 hover:border-app-line hover:shadow-md",
+      )}
       onClick={onSelect}
     >
       {/* Title row */}
@@ -327,9 +503,14 @@ function TaskCard({
           </span>
         )}
         {task.worker_id && (
-          <Badge variant="violet" size="sm">
-            Worker
-          </Badge>
+          <span className="flex items-center gap-1">
+            {isWorkerActive && (
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
+            )}
+            <Badge variant="violet" size="sm">
+              Worker
+            </Badge>
+          </span>
         )}
       </div>
 
@@ -343,39 +524,45 @@ function TaskCard({
         </div>
       )}
 
-      {/* Quick actions */}
-      <div className="mt-2 flex gap-1" onClick={(e) => e.stopPropagation()}>
-        {task.status === "pending_approval" && (
-          <button
-            className="rounded px-1.5 py-0.5 text-tiny text-accent hover:bg-accent/10"
-            onClick={onApprove}
-          >
-            Approve
-          </button>
-        )}
-        {(task.status === "backlog" || task.status === "pending_approval") && (
-          <button
-            className="rounded px-1.5 py-0.5 text-tiny text-violet-400 hover:bg-violet-400/10"
-            onClick={onExecute}
-          >
-            Execute
-          </button>
-        )}
-        {task.status === "in_progress" && (
-          <button
-            className="rounded px-1.5 py-0.5 text-tiny text-emerald-400 hover:bg-emerald-400/10"
-            onClick={() => onStatusChange("done")}
-          >
-            Mark Done
-          </button>
-        )}
-      </div>
+      {/* Quick actions — stop propagation so they don't open the dialog */}
+      {!isOverlay && (
+        <div className="mt-2 flex gap-1" onClick={(e) => e.stopPropagation()}>
+          {task.status === "pending_approval" && (
+            <button
+              className="rounded px-1.5 py-0.5 text-tiny text-accent hover:bg-accent/10"
+              onClick={onApprove}
+            >
+              Approve
+            </button>
+          )}
+          {(task.status === "backlog" || task.status === "pending_approval") && (
+            <button
+              className="rounded px-1.5 py-0.5 text-tiny text-violet-400 hover:bg-violet-400/10"
+              onClick={onExecute}
+            >
+              Execute
+            </button>
+          )}
+          {task.status === "in_progress" && (
+            <button
+              className="rounded px-1.5 py-0.5 text-tiny text-emerald-400 hover:bg-emerald-400/10"
+              onClick={() => onStatusChange("done")}
+            >
+              Mark Done
+            </button>
+          )}
+        </div>
+      )}
 
-      {/* Footer */}
-      <div className="mt-1.5 text-tiny text-ink-faint">
-        {formatTimeAgo(task.created_at)} by {task.created_by}
+      {/* Footer: timestamp */}
+      <div className="mt-1.5 flex items-center gap-1.5 text-tiny text-ink-faint">
+        <span title={new Date(task.updated_at).toLocaleString()}>
+          {formatTimeAgo(task.updated_at)}
+        </span>
+        <span>·</span>
+        <span>{task.created_by}</span>
       </div>
-    </motion.div>
+    </div>
   );
 }
 
