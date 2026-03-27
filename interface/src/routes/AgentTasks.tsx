@@ -397,8 +397,18 @@ function TaskCard({
           </span>
         )}
         {task.worker_id && (
-          <Badge variant="violet" size="sm">
-            Worker
+          <Badge variant="violet" size="sm" title={task.worker_id}>
+            {"\u2699"} {task.worker_id.slice(0, 8)}
+          </Badge>
+        )}
+        {task.metadata?.worktree && (
+          <Badge variant="outline" size="sm" title={String(task.metadata.worktree)}>
+            {"\uD83C\uDF33"} worktree
+          </Badge>
+        )}
+        {task.metadata?.assigned_agent && (
+          <Badge variant="accent" size="sm">
+            {String(task.metadata.assigned_agent)}
           </Badge>
         )}
       </div>
@@ -467,6 +477,7 @@ function CreateTaskDialog({
   const [priority, setPriority] = useState<TaskPriority>("medium");
   const [status, setStatus] = useState<TaskStatus>("backlog");
   const [dependsOn, setDependsOn] = useState("");
+  const [assignedAgent, setAssignedAgent] = useState("");
 
   const handleSubmit = useCallback(() => {
     if (!title.trim()) return;
@@ -474,19 +485,23 @@ function CreateTaskDialog({
       .split(",")
       .map((s) => parseInt(s.trim().replace("#", ""), 10))
       .filter((n) => !isNaN(n));
+    const metadata: Record<string, unknown> = {};
+    if (deps.length > 0) metadata.depends_on = deps;
+    if (assignedAgent.trim()) metadata.assigned_agent = assignedAgent.trim();
     onCreate({
       title: title.trim(),
       description: description.trim() || undefined,
       priority,
       status,
-      metadata: deps.length > 0 ? { depends_on: deps } : undefined,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     });
     setTitle("");
     setDescription("");
     setPriority("medium");
     setStatus("backlog");
     setDependsOn("");
-  }, [title, description, priority, status, dependsOn, onCreate]);
+    setAssignedAgent("");
+  }, [title, description, priority, status, dependsOn, assignedAgent, onCreate]);
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -518,16 +533,29 @@ function CreateTaskDialog({
               rows={3}
             />
           </div>
-          <div>
-            <label className="mb-1 block text-xs text-ink-dull">
-              Depends On
-            </label>
-            <input
-              className="w-full rounded-md border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-              placeholder="Task numbers, e.g. #1, #3"
-              value={dependsOn}
-              onChange={(e) => setDependsOn(e.target.value)}
-            />
+          <div className="flex gap-4">
+            <div className="flex-1">
+              <label className="mb-1 block text-xs text-ink-dull">
+                Depends On
+              </label>
+              <input
+                className="w-full rounded-md border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+                placeholder="#1, #3"
+                value={dependsOn}
+                onChange={(e) => setDependsOn(e.target.value)}
+              />
+            </div>
+            <div className="flex-1">
+              <label className="mb-1 block text-xs text-ink-dull">
+                Assign Agent
+              </label>
+              <input
+                className="w-full rounded-md border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+                placeholder="e.g. claude-code, codex"
+                value={assignedAgent}
+                onChange={(e) => setAssignedAgent(e.target.value)}
+              />
+            </div>
           </div>
           <div className="flex gap-4">
             <div className="flex-1">
@@ -619,6 +647,16 @@ function TaskDetailDialog({
             {task.worker_id && (
               <Badge variant="violet" size="md">
                 Worker: {task.worker_id.slice(0, 8)}
+              </Badge>
+            )}
+            {task.metadata?.assigned_agent && (
+              <Badge variant="accent" size="md">
+                Agent: {String(task.metadata.assigned_agent)}
+              </Badge>
+            )}
+            {task.metadata?.worktree && (
+              <Badge variant="default" size="md">
+                Worktree: {String(task.metadata.worktree)}
               </Badge>
             )}
           </div>
