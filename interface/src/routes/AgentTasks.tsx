@@ -57,6 +57,23 @@ const PRIORITY_COLORS: Record<
   low: "outline",
 };
 
+/** Extract dependency task numbers from metadata */
+function getDependencies(task: TaskItem): number[] {
+  const deps = task.metadata?.depends_on;
+  if (Array.isArray(deps)) return deps.filter((n): n is number => typeof n === "number");
+  return [];
+}
+
+/** Check if a task is blocked (has incomplete dependencies) */
+function isBlocked(task: TaskItem, allTasks: TaskItem[]): boolean {
+  const deps = getDependencies(task);
+  if (deps.length === 0) return false;
+  return deps.some((depNum) => {
+    const depTask = allTasks.find((t) => t.task_number === depNum);
+    return depTask && depTask.status !== "done";
+  });
+}
+
 export function AgentTasks({ agentId }: { agentId: string }) {
   const queryClient = useQueryClient();
   const { taskEventVersion } = useLiveContext();
@@ -165,12 +182,25 @@ export function AgentTasks({ agentId }: { agentId: string }) {
           </span>
           {tasksByStatus.pending_approval.length > 0 && (
             <Badge variant="amber" size="sm">
-              {tasksByStatus.pending_approval.length} pending approval
+              {tasksByStatus.pending_approval.length} pending
             </Badge>
           )}
           {tasksByStatus.in_progress.length > 0 && (
             <Badge variant="violet" size="sm">
-              {tasksByStatus.in_progress.length} in progress
+              {tasksByStatus.in_progress.length} active
+            </Badge>
+          )}
+          {(() => {
+            const blockedCount = tasks.filter((t) => isBlocked(t, tasks)).length;
+            return blockedCount > 0 ? (
+              <Badge variant="red" size="sm">
+                {blockedCount} blocked
+              </Badge>
+            ) : null;
+          })()}
+          {tasksByStatus.done.length > 0 && (
+            <Badge variant="green" size="sm">
+              {tasksByStatus.done.length} done
             </Badge>
           )}
         </div>
@@ -187,6 +217,7 @@ export function AgentTasks({ agentId }: { agentId: string }) {
             status={status}
             label={label}
             tasks={tasksByStatus[status]}
+            allTasks={tasks}
             onSelect={(task) => setSelectedTaskNumber(task.task_number)}
             onApprove={(task) => approveMutation.mutate(task.task_number)}
             onExecute={(task) => executeMutation.mutate(task.task_number)}
@@ -212,6 +243,7 @@ export function AgentTasks({ agentId }: { agentId: string }) {
       {selectedTask && (
         <TaskDetailDialog
           task={selectedTask}
+          allTasks={tasks}
           onClose={() => setSelectedTaskNumber(null)}
           onApprove={() => approveMutation.mutate(selectedTask.task_number)}
           onExecute={() => executeMutation.mutate(selectedTask.task_number)}
@@ -234,6 +266,7 @@ function KanbanColumn({
   status,
   label,
   tasks,
+  allTasks,
   onSelect,
   onApprove,
   onExecute,
@@ -242,6 +275,7 @@ function KanbanColumn({
   status: TaskStatus;
   label: string;
   tasks: TaskItem[];
+  allTasks: TaskItem[];
   onSelect: (task: TaskItem) => void;
   onApprove: (task: TaskItem) => void;
   onExecute: (task: TaskItem) => void;
@@ -264,6 +298,7 @@ function KanbanColumn({
             <TaskCard
               key={task.id}
               task={task}
+              allTasks={allTasks}
               onSelect={() => onSelect(task)}
               onApprove={() => onApprove(task)}
               onExecute={() => onExecute(task)}
@@ -285,12 +320,14 @@ function KanbanColumn({
 
 function TaskCard({
   task,
+  allTasks,
   onSelect,
   onApprove,
   onExecute,
   onStatusChange,
 }: {
   task: TaskItem;
+  allTasks: TaskItem[];
   onSelect: () => void;
   onApprove: () => void;
   onExecute: () => void;
@@ -298,6 +335,8 @@ function TaskCard({
 }) {
   const subtasksDone = task.subtasks.filter((s) => s.completed).length;
   const subtasksTotal = task.subtasks.length;
+  const deps = getDependencies(task);
+  const blocked = isBlocked(task, allTasks);
 
   return (
     <motion.div
@@ -306,7 +345,11 @@ function TaskCard({
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.95 }}
       transition={{ duration: 0.15 }}
-      className="cursor-pointer rounded-md border border-app-line/30 bg-app p-3 transition-colors hover:border-app-line"
+      className={`cursor-pointer rounded-md border p-3 transition-colors hover:border-app-line ${
+        blocked
+          ? "border-red-500/30 bg-red-950/10"
+          : "border-app-line/30 bg-app"
+      }`}
       onClick={onSelect}
     >
       {/* Title row */}
@@ -314,7 +357,34 @@ function TaskCard({
         <span className="text-sm font-medium text-ink leading-tight">
           #{task.task_number} {task.title}
         </span>
+        {blocked && (
+          <span className="shrink-0 text-tiny text-red-400" title="Blocked by dependencies">
+            Blocked
+          </span>
+        )}
       </div>
+
+      {/* Dependencies */}
+      {deps.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {deps.map((depNum) => {
+            const depTask = allTasks.find((t) => t.task_number === depNum);
+            const depDone = depTask?.status === "done";
+            return (
+              <span
+                key={depNum}
+                className={`inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-tiny ${
+                  depDone
+                    ? "bg-emerald-500/10 text-emerald-400"
+                    : "bg-amber-500/10 text-amber-400"
+                }`}
+              >
+                {depDone ? "\u2713" : "\u23F3"} #{depNum}
+              </span>
+            );
+          })}
+        </div>
+      )}
 
       {/* Meta row */}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -396,20 +466,27 @@ function CreateTaskDialog({
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<TaskPriority>("medium");
   const [status, setStatus] = useState<TaskStatus>("backlog");
+  const [dependsOn, setDependsOn] = useState("");
 
   const handleSubmit = useCallback(() => {
     if (!title.trim()) return;
+    const deps = dependsOn
+      .split(",")
+      .map((s) => parseInt(s.trim().replace("#", ""), 10))
+      .filter((n) => !isNaN(n));
     onCreate({
       title: title.trim(),
       description: description.trim() || undefined,
       priority,
       status,
+      metadata: deps.length > 0 ? { depends_on: deps } : undefined,
     });
     setTitle("");
     setDescription("");
     setPriority("medium");
     setStatus("backlog");
-  }, [title, description, priority, status, onCreate]);
+    setDependsOn("");
+  }, [title, description, priority, status, dependsOn, onCreate]);
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -439,6 +516,17 @@ function CreateTaskDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-ink-dull">
+              Depends On
+            </label>
+            <input
+              className="w-full rounded-md border border-app-line bg-app-darkBox px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+              placeholder="Task numbers, e.g. #1, #3"
+              value={dependsOn}
+              onChange={(e) => setDependsOn(e.target.value)}
             />
           </div>
           <div className="flex gap-4">
@@ -494,6 +582,7 @@ function CreateTaskDialog({
 
 function TaskDetailDialog({
   task,
+  allTasks,
   onClose,
   onApprove,
   onExecute,
@@ -501,12 +590,15 @@ function TaskDetailDialog({
   onStatusChange,
 }: {
   task: TaskItem;
+  allTasks: TaskItem[];
   onClose: () => void;
   onApprove: () => void;
   onExecute: () => void;
   onDelete: () => void;
   onStatusChange: (status: TaskStatus) => void;
 }) {
+  const deps = getDependencies(task);
+  const blocked = isBlocked(task, allTasks);
   return (
     <Dialog open={true} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="!flex max-h-[85vh] max-w-lg !flex-col overflow-hidden">
@@ -530,6 +622,36 @@ function TaskDetailDialog({
               </Badge>
             )}
           </div>
+
+          {/* Dependencies */}
+          {deps.length > 0 && (
+            <div>
+              <label className="mb-1 block text-xs text-ink-dull">
+                Dependencies {blocked && <span className="text-red-400">(blocked)</span>}
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {deps.map((depNum) => {
+                  const depTask = allTasks.find((t) => t.task_number === depNum);
+                  const depDone = depTask?.status === "done";
+                  return (
+                    <span
+                      key={depNum}
+                      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs ${
+                        depDone
+                          ? "bg-emerald-500/10 text-emerald-400"
+                          : "bg-amber-500/10 text-amber-400"
+                      }`}
+                    >
+                      {depDone ? "\u2713" : "\u23F3"} #{depNum}
+                      {depTask && (
+                        <span className="text-ink-faint"> {depTask.title.slice(0, 30)}{depTask.title.length > 30 ? "..." : ""}</span>
+                      )}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Description */}
           {task.description && (

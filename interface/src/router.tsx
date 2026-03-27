@@ -24,6 +24,7 @@ import {AgentProjects} from "@/routes/AgentProjects";
 import {AgentTasks} from "@/routes/AgentTasks";
 import {AgentChat} from "@/routes/AgentChat";
 import {Settings} from "@/routes/Settings";
+import {Pricing} from "@/routes/Pricing";
 import {useLiveContext} from "@/hooks/useLiveContext";
 import {AgentTabs} from "@/components/AgentTabs";
 
@@ -104,6 +105,14 @@ const settingsRoute = createRoute({
 	},
 	component: function SettingsPage() {
 		return <Settings />;
+	},
+});
+
+const pricingRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: "/pricing",
+	component: function PricingPage() {
+		return <Pricing />;
 	},
 });
 
@@ -353,6 +362,7 @@ const channelRoute = createRoute({
 const routeTree = rootRoute.addChildren([
 	indexRoute,
 	settingsRoute,
+	pricingRoute,
 	logsRoute,
 	agentRoute,
 	agentChatRoute,
