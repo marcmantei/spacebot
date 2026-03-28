@@ -402,13 +402,14 @@ pub(super) async fn task_diff(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let metadata = task.metadata.as_ref();
-    let worktree_path = metadata
-        .and_then(|m| m.get("worktree"))
+    let worktree_path = task
+        .metadata
+        .get("worktree")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let branch = metadata
-        .and_then(|m| m.get("branch"))
+    let branch = task
+        .metadata
+        .get("branch")
         .and_then(|v| v.as_str())
         .map(String::from);
 
@@ -480,12 +481,11 @@ pub(super) async fn create_worktree(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     // Check if worktree already exists
-    if let Some(existing) = task.metadata.as_ref().and_then(|m| m.get("worktree")) {
+    if let Some(existing) = task.metadata.get("worktree") {
         if let Some(path) = existing.as_str() {
             let branch = task
                 .metadata
-                .as_ref()
-                .and_then(|m| m.get("branch"))
+                .get("branch")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
@@ -551,7 +551,7 @@ pub(super) async fn create_worktree(
     }
 
     // Update task metadata with worktree info
-    let mut metadata = task.metadata.unwrap_or_else(|| serde_json::json!({}));
+    let mut metadata = task.metadata;
     if let Some(obj) = metadata.as_object_mut() {
         obj.insert("worktree".to_string(), serde_json::json!(worktree_dir));
         obj.insert("branch".to_string(), serde_json::json!(branch_name));
@@ -611,8 +611,7 @@ pub(super) async fn delete_worktree(
 
     let worktree_path = task
         .metadata
-        .as_ref()
-        .and_then(|m| m.get("worktree"))
+        .get("worktree")
         .and_then(|v| v.as_str())
         .ok_or(StatusCode::NOT_FOUND)?
         .to_string();
@@ -624,7 +623,7 @@ pub(super) async fn delete_worktree(
         .await;
 
     // Clean metadata
-    let mut metadata = task.metadata.unwrap_or_else(|| serde_json::json!({}));
+    let mut metadata = task.metadata;
     if let Some(obj) = metadata.as_object_mut() {
         obj.remove("worktree");
         // Keep branch reference for history
