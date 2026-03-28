@@ -164,6 +164,10 @@ pub async fn start_http_server(
         .route("/agents/tasks/{number}/execute", post(tasks::execute_task))
         .route("/agents/tasks/{number}/diff", get(tasks::task_diff))
         .route(
+            "/agents/tasks/{number}/worktree",
+            post(tasks::create_worktree).delete(tasks::delete_worktree),
+        )
+        .route(
             "/agents/projects",
             get(projects::list_projects).post(projects::create_project),
         )

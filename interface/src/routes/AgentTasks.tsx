@@ -799,6 +799,29 @@ function TaskDetailDialog({
             </div>
           )}
 
+          {/* Worktree Actions */}
+          {!task.metadata?.worktree && task.status !== "done" && (
+            <button
+              className="w-full rounded-md border border-dashed border-app-line px-3 py-2 text-xs text-ink-faint hover:border-accent hover:text-accent transition-colors"
+              onClick={async () => {
+                const resp = await fetch(
+                  `/api/agents/tasks/${task.task_number}/worktree`,
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ agent_id: agentId }),
+                  }
+                );
+                if (resp.ok) {
+                  // Invalidate to refresh task with new metadata
+                  window.location.reload();
+                }
+              }}
+            >
+              Create Worktree for Task #{task.task_number}
+            </button>
+          )}
+
           {/* Inline Diff Review */}
           {diffData?.diff && (
             <div>

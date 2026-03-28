@@ -211,6 +211,49 @@ TOOLS = [
         },
     },
     {
+        "name": "spacebot_create_worktree",
+        "description": "Create a git worktree for a task (isolated workspace)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "Agent ID (default: 'main')",
+                    "default": "main",
+                },
+                "task_number": {
+                    "type": "integer",
+                    "description": "Task number to create worktree for",
+                },
+                "base_branch": {
+                    "type": "string",
+                    "description": "Base branch (default: 'main')",
+                    "default": "main",
+                },
+            },
+            "required": ["task_number"],
+        },
+    },
+    {
+        "name": "spacebot_task_diff",
+        "description": "Get the git diff for a task's worktree or branch",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "Agent ID (default: 'main')",
+                    "default": "main",
+                },
+                "task_number": {
+                    "type": "integer",
+                    "description": "Task number",
+                },
+            },
+            "required": ["task_number"],
+        },
+    },
+    {
         "name": "spacebot_status",
         "description": "Get Spacebot system status and version info",
         "inputSchema": {
@@ -273,6 +316,17 @@ def handle_tool_call(name: str, arguments: dict) -> Any:
 
     elif name == "spacebot_list_channels":
         return api_request("GET", f"/agents/{agent_id}/channels")
+
+    elif name == "spacebot_create_worktree":
+        task_number = arguments["task_number"]
+        body = {"agent_id": agent_id}
+        if "base_branch" in arguments:
+            body["base_branch"] = arguments["base_branch"]
+        return api_request("POST", f"/agents/tasks/{task_number}/worktree", body)
+
+    elif name == "spacebot_task_diff":
+        task_number = arguments["task_number"]
+        return api_request("GET", f"/agents/tasks/{task_number}/diff?agent_id={agent_id}")
 
     elif name == "spacebot_status":
         return api_request("GET", "/system/status")
