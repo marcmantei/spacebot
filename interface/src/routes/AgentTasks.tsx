@@ -18,6 +18,7 @@ import {
   DialogFooter,
 } from "@/ui/Dialog";
 import { Markdown } from "@/components/Markdown";
+import { TaskDependencyGraph } from "@/components/TaskDependencyGraph";
 import { formatTimeAgo } from "@/lib/format";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -107,6 +108,8 @@ export function AgentTasks({ agentId }: { agentId: string }) {
     tasksByStatus[task.status]?.push(task);
   }
 
+  // View mode: "board" (kanban) or "graph" (dependency graph)
+  const [viewMode, setViewMode] = useState<"board" | "graph">("board");
   // Create task dialog
   const [createOpen, setCreateOpen] = useState(false);
   // Detail dialog — store task number and derive from live list to stay current.
@@ -204,13 +207,48 @@ export function AgentTasks({ agentId }: { agentId: string }) {
             </Badge>
           )}
         </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          Create Task
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* View Toggle */}
+          <div className="flex rounded-md border border-app-line">
+            <button
+              className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                viewMode === "board"
+                  ? "bg-app-selected text-ink"
+                  : "text-ink-faint hover:text-ink"
+              }`}
+              onClick={() => setViewMode("board")}
+            >
+              Board
+            </button>
+            <button
+              className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                viewMode === "graph"
+                  ? "bg-app-selected text-ink"
+                  : "text-ink-faint hover:text-ink"
+              }`}
+              onClick={() => setViewMode("graph")}
+            >
+              Graph
+            </button>
+          </div>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            Create Task
+          </Button>
+        </div>
       </div>
 
+      {/* Dependency Graph View */}
+      {viewMode === "graph" && (
+        <div className="flex-1 overflow-hidden">
+          <TaskDependencyGraph
+            tasks={tasks}
+            onSelectTask={(num) => setSelectedTaskNumber(num)}
+          />
+        </div>
+      )}
+
       {/* Kanban Board */}
-      <div className="flex flex-1 flex-wrap content-start gap-3 overflow-y-auto p-4">
+      <div className={`flex flex-1 flex-wrap content-start gap-3 overflow-y-auto p-4 ${viewMode === "graph" ? "hidden" : ""}`}
         {COLUMNS.map(({ status, label }) => (
           <KanbanColumn
             key={status}
