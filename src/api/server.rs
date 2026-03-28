@@ -162,6 +162,7 @@ pub async fn start_http_server(
         )
         .route("/agents/tasks/{number}/approve", post(tasks::approve_task))
         .route("/agents/tasks/{number}/execute", post(tasks::execute_task))
+        .route("/agents/tasks/{number}/diff", get(tasks::task_diff))
         .route(
             "/agents/projects",
             get(projects::list_projects).post(projects::create_project),

@@ -5,6 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::process::Command as TokioCommand;
 
 #[derive(Deserialize)]
 pub(super) struct TaskListQuery {
@@ -372,4 +373,74 @@ pub(super) async fn execute_task(
         .ok();
 
     Ok(Json(TaskResponse { task }))
+}
+
+#[derive(Serialize)]
+pub(super) struct TaskDiffResponse {
+    task_number: i64,
+    diff: String,
+    branch: Option<String>,
+    worktree: Option<String>,
+}
+
+/// Get the git diff for a task. Reads `worktree` and `branch` from task
+/// metadata to determine which diff to show.
+pub(super) async fn task_diff(
+    State(state): State<Arc<ApiState>>,
+    Path(number): Path<i64>,
+    Query(query): Query<TaskGetQuery>,
+) -> Result<Json<TaskDiffResponse>, StatusCode> {
+    let stores = state.task_stores.load();
+    let store = stores.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    let task = store
+        .get_by_number(&query.agent_id, number)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, agent_id = %query.agent_id, task_number = number, "failed to get task for diff");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let metadata = task.metadata.as_ref();
+    let worktree_path = metadata
+        .and_then(|m| m.get("worktree"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let branch = metadata
+        .and_then(|m| m.get("branch"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let diff = if let Some(ref wt) = worktree_path {
+        let output = TokioCommand::new("git")
+            .args(["diff", "HEAD"])
+            .current_dir(wt)
+            .output()
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, worktree = %wt, "failed to run git diff in worktree");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        String::from_utf8_lossy(&output.stdout).to_string()
+    } else if let Some(ref br) = branch {
+        let output = TokioCommand::new("git")
+            .args(["diff", &format!("main...{br}")])
+            .output()
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, branch = %br, "failed to run git diff for branch");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        String::from_utf8_lossy(&output.stdout).to_string()
+    } else {
+        String::new()
+    };
+
+    Ok(Json(TaskDiffResponse {
+        task_number: number,
+        diff,
+        branch,
+        worktree: worktree_path,
+    }))
 }

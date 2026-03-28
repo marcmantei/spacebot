@@ -19,6 +19,7 @@ import {
 } from "@/ui/Dialog";
 import { Markdown } from "@/components/Markdown";
 import { TaskDependencyGraph } from "@/components/TaskDependencyGraph";
+import { DiffViewer } from "@/components/DiffViewer";
 import { formatTimeAgo } from "@/lib/format";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -282,6 +283,7 @@ export function AgentTasks({ agentId }: { agentId: string }) {
         <TaskDetailDialog
           task={selectedTask}
           allTasks={tasks}
+          agentId={agentId}
           onClose={() => setSelectedTaskNumber(null)}
           onApprove={() => approveMutation.mutate(selectedTask.task_number)}
           onExecute={() => executeMutation.mutate(selectedTask.task_number)}
@@ -649,6 +651,7 @@ function CreateTaskDialog({
 function TaskDetailDialog({
   task,
   allTasks,
+  agentId,
   onClose,
   onApprove,
   onExecute,
@@ -657,6 +660,7 @@ function TaskDetailDialog({
 }: {
   task: TaskItem;
   allTasks: TaskItem[];
+  agentId: string;
   onClose: () => void;
   onApprove: () => void;
   onExecute: () => void;
@@ -665,6 +669,26 @@ function TaskDetailDialog({
 }) {
   const deps = getDependencies(task);
   const blocked = isBlocked(task, allTasks);
+
+  // Fetch diff if task has worktree or branch metadata
+  const hasDiffSource = task.metadata?.worktree || task.metadata?.branch;
+  const { data: diffData } = useQuery({
+    queryKey: ["task-diff", agentId, task.task_number],
+    queryFn: async () => {
+      const resp = await fetch(
+        `/api/agents/tasks/${task.task_number}/diff?agent_id=${agentId}`
+      );
+      if (!resp.ok) return { diff: "", branch: null, worktree: null };
+      return resp.json() as Promise<{
+        diff: string;
+        branch: string | null;
+        worktree: string | null;
+      }>;
+    },
+    enabled: !!hasDiffSource,
+    staleTime: 10_000,
+  });
+
   return (
     <Dialog open={true} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="!flex max-h-[85vh] max-w-lg !flex-col overflow-hidden">
@@ -772,6 +796,17 @@ function TaskDetailDialog({
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {/* Inline Diff Review */}
+          {diffData?.diff && (
+            <div>
+              <label className="mb-1 block text-xs text-ink-dull">
+                Changes {diffData.branch && `(branch: ${diffData.branch})`}
+                {diffData.worktree && `(worktree)`}
+              </label>
+              <DiffViewer diff={diffData.diff} maxHeight="300px" />
             </div>
           )}
 
