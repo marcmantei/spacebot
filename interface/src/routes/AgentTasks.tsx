@@ -20,6 +20,7 @@ import {
 import { Markdown } from "@/components/Markdown";
 import { TaskDependencyGraph } from "@/components/TaskDependencyGraph";
 import { DiffViewer } from "@/components/DiffViewer";
+import { useSpacebotConfig } from "@/hooks/useSpacebotConfig";
 import { formatTimeAgo } from "@/lib/format";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -97,6 +98,7 @@ interface IssuesResponse {
 export function AgentTasks({ agentId }: { agentId: string }) {
   const queryClient = useQueryClient();
   const { taskEventVersion } = useLiveContext();
+  const config = useSpacebotConfig(agentId);
 
   // Invalidate on SSE task events
   const prevVersion = useRef(taskEventVersion);
@@ -142,7 +144,15 @@ export function AgentTasks({ agentId }: { agentId: string }) {
     ? githubIssues
     : githubIssues.filter((i) => i.repository === projectFilter);
 
-  // Group tasks by status
+  // Filter tasks by project (if a project filter is active)
+  const filteredTasks = projectFilter === "all"
+    ? tasks
+    : tasks.filter((t) => {
+        const repo = t.metadata?.github_repository as string | undefined;
+        return repo === projectFilter;
+      });
+
+  // Group filtered tasks by status
   const tasksByStatus: Record<TaskStatus, TaskItem[]> = {
     pending_approval: [],
     backlog: [],
@@ -150,7 +160,7 @@ export function AgentTasks({ agentId }: { agentId: string }) {
     in_progress: [],
     done: [],
   };
-  for (const task of tasks) {
+  for (const task of filteredTasks) {
     tasksByStatus[task.status]?.push(task);
   }
 
@@ -212,6 +222,31 @@ export function AgentTasks({ agentId }: { agentId: string }) {
       setSelectedTaskNumber(null);
     },
   });
+
+  const importIssueMutation = useMutation({
+    mutationFn: (issue: GitHubIssue) =>
+      api.createTask(agentId, {
+        title: `[${issue.repository.split("/").pop()}#${issue.number}] ${issue.title}`,
+        description: `GitHub: ${issue.url}`,
+        status: "backlog",
+        priority: "medium",
+        metadata: {
+          github_issue_url: issue.url,
+          github_issue_number: issue.number,
+          github_repository: issue.repository,
+        },
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks", agentId] });
+    },
+  });
+
+  // Track which issues are already imported as tasks
+  const importedIssueUrls = new Set(
+    tasks
+      .map((t) => t.metadata?.github_issue_url as string | undefined)
+      .filter(Boolean)
+  );
 
   if (isLoading) {
     return (
@@ -310,6 +345,49 @@ export function AgentTasks({ agentId }: { agentId: string }) {
         </div>
       </div>
 
+      {/* Config Status Bar */}
+      {config.isReady && (
+        <div className="flex items-center gap-2 border-b border-app-line/50 bg-app-darkBox/20 px-4 py-1.5">
+          {/* Worker Model */}
+          <span className="rounded bg-app-line/30 px-1.5 py-0.5 text-tiny text-ink-faint" title="Worker model">
+            {config.workerModel.split("/").pop() ?? "no model"}
+          </span>
+          {/* Concurrency */}
+          <span
+            className={`rounded px-1.5 py-0.5 text-tiny ${
+              tasksByStatus.in_progress.length >= config.maxConcurrentWorkers
+                ? "bg-amber-500/10 text-amber-400"
+                : "bg-app-line/30 text-ink-faint"
+            }`}
+            title="Active / max concurrent workers"
+          >
+            {tasksByStatus.in_progress.length}/{config.maxConcurrentWorkers} workers
+          </span>
+          {/* Worktrees */}
+          <span
+            className={`rounded px-1.5 py-0.5 text-tiny ${
+              config.useWorktrees
+                ? "bg-emerald-500/10 text-emerald-400"
+                : "bg-app-line/30 text-ink-faint"
+            }`}
+          >
+            Worktrees {config.useWorktrees ? "ON" : "OFF"}
+          </span>
+          {/* Platforms */}
+          {config.enabledPlatforms.map((p) => (
+            <span key={p} className="rounded bg-app-line/30 px-1.5 py-0.5 text-tiny text-ink-faint capitalize">
+              {p}
+            </span>
+          ))}
+          {/* Auth */}
+          {config.isAnthropic && (
+            <span className="rounded bg-accent/10 px-1.5 py-0.5 text-tiny text-accent">
+              Claude Max
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Dependency Graph View */}
       {viewMode === "graph" && (
         <div className="flex-1 overflow-hidden">
@@ -351,42 +429,63 @@ export function AgentTasks({ agentId }: { agentId: string }) {
               <span className="text-tiny text-ink-faint">{filteredIssues.length}</span>
             </div>
             <div className="flex-1 space-y-2 overflow-y-auto p-2">
-              {filteredIssues.map((issue) => (
-                <a
-                  key={`${issue.repository}-${issue.number}`}
-                  href={issue.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block cursor-pointer rounded-md border border-app-line/30 bg-app p-3 transition-colors hover:border-accent/50"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="text-sm font-medium text-ink leading-tight">
-                      #{issue.number} {issue.title}
-                    </span>
-                  </div>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                    <span className="rounded bg-accent/10 px-1 py-0.5 text-tiny text-accent">
-                      {issue.repository.split("/").pop()}
-                    </span>
-                    {issue.labels.slice(0, 3).map((label) => (
-                      <span
-                        key={label}
-                        className="rounded bg-app-line/50 px-1 py-0.5 text-tiny text-ink-faint"
-                      >
-                        {label}
+              {filteredIssues.map((issue) => {
+                const isImported = importedIssueUrls.has(issue.url);
+                return (
+                  <div
+                    key={`${issue.repository}-${issue.number}`}
+                    className="rounded-md border border-app-line/30 bg-app p-3 transition-colors hover:border-accent/50"
+                  >
+                    <a
+                      href={issue.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="text-sm font-medium text-ink leading-tight">
+                          #{issue.number} {issue.title}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                        <span className="rounded bg-accent/10 px-1 py-0.5 text-tiny text-accent">
+                          {issue.repository.split("/").pop()}
+                        </span>
+                        {issue.labels.slice(0, 3).map((label) => (
+                          <span
+                            key={label}
+                            className="rounded bg-app-line/50 px-1 py-0.5 text-tiny text-ink-faint"
+                          >
+                            {label}
+                          </span>
+                        ))}
+                      </div>
+                      {issue.assignees.length > 0 && (
+                        <div className="mt-1 text-tiny text-ink-faint">
+                          {issue.assignees.join(", ")}
+                        </div>
+                      )}
+                    </a>
+                    <div className="mt-1.5 flex items-center justify-between">
+                      <span className="text-tiny text-ink-faint">
+                        {formatTimeAgo(issue.updated_at)}
                       </span>
-                    ))}
-                  </div>
-                  {issue.assignees.length > 0 && (
-                    <div className="mt-1 text-tiny text-ink-faint">
-                      {issue.assignees.join(", ")}
+                      {isImported ? (
+                        <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-tiny text-emerald-400">
+                          Imported
+                        </span>
+                      ) : (
+                        <button
+                          className="rounded bg-accent/10 px-1.5 py-0.5 text-tiny text-accent hover:bg-accent/20"
+                          onClick={() => importIssueMutation.mutate(issue)}
+                        >
+                          Import
+                        </button>
+                      )}
                     </div>
-                  )}
-                  <div className="mt-1 text-tiny text-ink-faint">
-                    {formatTimeAgo(issue.updated_at)}
                   </div>
-                </a>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
