@@ -18,7 +18,22 @@ export function Welcome() {
 		staleTime: 5_000,
 	});
 
+	const { data: agentsData } = useQuery({
+		queryKey: ["agents"],
+		queryFn: api.agents,
+		staleTime: 10_000,
+	});
+
 	const hasProvider = providersData?.has_any ?? false;
+	const isAnthropic = providersData?.providers?.anthropic ?? false;
+	const hasAgent = (agentsData?.agents?.length ?? 0) > 0;
+
+	// Detect auth method
+	const providerLabel = isAnthropic
+		? "Anthropic (Claude Max / OAuth)"
+		: hasProvider
+			? "LLM provider configured"
+			: null;
 
 	return (
 		<div className="flex flex-1 flex-col items-center justify-center overflow-y-auto">
@@ -51,10 +66,13 @@ export function Welcome() {
 							</span>
 							<div className="flex-1">
 								<p className="text-sm text-ink">
-									{hasProvider
-										? "LLM provider configured"
-										: "Add an LLM provider (API key)"}
+									{providerLabel ?? "Add an LLM provider"}
 								</p>
+								{!hasProvider && (
+									<p className="mt-0.5 text-xs text-ink-faint">
+										API key, Claude Max OAuth, or another provider
+									</p>
+								)}
 							</div>
 							{!hasProvider && (
 								<button
@@ -70,12 +88,37 @@ export function Welcome() {
 
 						{/* Step 2: Agent */}
 						<div className="flex items-center gap-3">
-							<span className="flex h-6 w-6 items-center justify-center rounded-full bg-app-line/50 text-xs font-bold text-ink-faint">
-								2
+							<span
+								className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${
+									hasAgent
+										? "bg-emerald-500/20 text-emerald-400"
+										: hasProvider
+											? "bg-accent/20 text-accent"
+											: "bg-app-line/50 text-ink-faint"
+								}`}
+							>
+								{hasAgent ? "\u2713" : "2"}
 							</span>
-							<p className="flex-1 text-sm text-ink-dull">
-								Create your first agent
-							</p>
+							<div className="flex-1">
+								<p className={`text-sm ${hasAgent ? "text-ink" : "text-ink-dull"}`}>
+									{hasAgent
+										? `Agent active (${agentsData!.agents[0].id})`
+										: "Create your first agent"}
+								</p>
+							</div>
+							{hasProvider && hasAgent && (
+								<button
+									className="rounded-md bg-app-button px-3 py-1 text-xs text-ink hover:bg-app-hover"
+									onClick={() =>
+										navigate({
+											to: "/agents/$agentId",
+											params: { agentId: agentsData!.agents[0].id },
+										})
+									}
+								>
+									View
+								</button>
+							)}
 						</div>
 
 						{/* Step 3: Connect */}
@@ -92,6 +135,19 @@ export function Welcome() {
 
 				{/* Quick Links */}
 				<div className="mt-6 flex items-center justify-center gap-4">
+					{hasAgent && (
+						<button
+							className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-deep"
+							onClick={() =>
+								navigate({
+									to: "/agents/$agentId/tasks",
+									params: { agentId: agentsData!.agents[0].id },
+								})
+							}
+						>
+							Kanban Board
+						</button>
+					)}
 					<button
 						className="rounded-md bg-app-button px-4 py-2 text-sm text-ink hover:bg-app-hover"
 						onClick={() => navigate({ to: "/settings" })}
@@ -104,14 +160,6 @@ export function Welcome() {
 					>
 						Pricing
 					</button>
-					<a
-						href="https://github.com/spacedriveapp/spacebot"
-						target="_blank"
-						rel="noopener noreferrer"
-						className="rounded-md bg-app-button px-4 py-2 text-sm text-ink hover:bg-app-hover"
-					>
-						GitHub
-					</a>
 				</div>
 
 				{/* Tagline */}

@@ -76,6 +76,24 @@ function isBlocked(task: TaskItem, allTasks: TaskItem[]): boolean {
   });
 }
 
+// -- GitHub Issue type (from registry API) --
+interface GitHubIssue {
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  repository: string;
+  labels: string[];
+  assignees: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+interface IssuesResponse {
+  issues: GitHubIssue[];
+  repos: string[];
+}
+
 export function AgentTasks({ agentId }: { agentId: string }) {
   const queryClient = useQueryClient();
   const { taskEventVersion } = useLiveContext();
@@ -95,7 +113,34 @@ export function AgentTasks({ agentId }: { agentId: string }) {
     refetchInterval: 15_000,
   });
 
+  // Fetch GitHub issues from registry
+  const { data: issuesData } = useQuery({
+    queryKey: ["registry-issues", agentId],
+    queryFn: async () => {
+      const resp = await fetch(
+        `/api/registry/issues?agent_id=${agentId}&limit=100`
+      );
+      if (!resp.ok) return { issues: [], repos: [] } as IssuesResponse;
+      return resp.json() as Promise<IssuesResponse>;
+    },
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+
+  const githubIssues = issuesData?.issues ?? [];
+  const availableRepos = issuesData?.repos ?? [];
+
   const tasks = data?.tasks ?? [];
+
+  // Project filter
+  const [projectFilter, setProjectFilter] = useState<string>("all");
+  // Show/hide GitHub issues
+  const [showIssues, setShowIssues] = useState(true);
+
+  // Filter GitHub issues by project
+  const filteredIssues = projectFilter === "all"
+    ? githubIssues
+    : githubIssues.filter((i) => i.repository === projectFilter);
 
   // Group tasks by status
   const tasksByStatus: Record<TaskStatus, TaskItem[]> = {
@@ -232,6 +277,33 @@ export function AgentTasks({ agentId }: { agentId: string }) {
               Graph
             </button>
           </div>
+          {/* Project Filter */}
+          {availableRepos.length > 0 && (
+            <select
+              className="rounded-md border border-app-line bg-app-darkBox px-2 py-1 text-xs text-ink focus:border-accent focus:outline-none"
+              value={projectFilter}
+              onChange={(e) => setProjectFilter(e.target.value)}
+            >
+              <option value="all">All Projects</option>
+              {availableRepos.map((repo) => (
+                <option key={repo} value={repo}>
+                  {repo.split("/").pop()}
+                </option>
+              ))}
+            </select>
+          )}
+          {/* Issues Toggle */}
+          <button
+            className={`rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
+              showIssues
+                ? "border-accent/50 bg-accent/10 text-accent"
+                : "border-app-line text-ink-faint hover:text-ink"
+            }`}
+            onClick={() => setShowIssues(!showIssues)}
+            title="Show/hide GitHub issues"
+          >
+            Issues {showIssues && filteredIssues.length > 0 ? `(${filteredIssues.length})` : ""}
+          </button>
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             Create Task
           </Button>
@@ -268,6 +340,56 @@ export function AgentTasks({ agentId }: { agentId: string }) {
             }
           />
         ))}
+
+        {/* GitHub Issues Column */}
+        {showIssues && filteredIssues.length > 0 && (
+          <div className="flex min-h-0 min-w-[14rem] flex-1 basis-[14rem] flex-col rounded-lg border border-accent/20 bg-accent/5">
+            <div className="flex items-center gap-2 border-b border-accent/10 px-3 py-2">
+              <Badge variant="accent" size="sm">
+                GitHub Issues
+              </Badge>
+              <span className="text-tiny text-ink-faint">{filteredIssues.length}</span>
+            </div>
+            <div className="flex-1 space-y-2 overflow-y-auto p-2">
+              {filteredIssues.map((issue) => (
+                <a
+                  key={`${issue.repository}-${issue.number}`}
+                  href={issue.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block cursor-pointer rounded-md border border-app-line/30 bg-app p-3 transition-colors hover:border-accent/50"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-sm font-medium text-ink leading-tight">
+                      #{issue.number} {issue.title}
+                    </span>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                    <span className="rounded bg-accent/10 px-1 py-0.5 text-tiny text-accent">
+                      {issue.repository.split("/").pop()}
+                    </span>
+                    {issue.labels.slice(0, 3).map((label) => (
+                      <span
+                        key={label}
+                        className="rounded bg-app-line/50 px-1 py-0.5 text-tiny text-ink-faint"
+                      >
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                  {issue.assignees.length > 0 && (
+                    <div className="mt-1 text-tiny text-ink-faint">
+                      {issue.assignees.join(", ")}
+                    </div>
+                  )}
+                  <div className="mt-1 text-tiny text-ink-faint">
+                    {formatTimeAgo(issue.updated_at)}
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Create Dialog */}
