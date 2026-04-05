@@ -1,8 +1,9 @@
 import {useCallback, useMemo, useRef, useState} from "react";
+import {MagnifyingGlassMinus, MagnifyingGlassPlus, CornersOut} from "@phosphor-icons/react";
+import {CircleButton} from "@spacedrive/primitives";
 import {
 	ReactFlow,
 	Background,
-	Controls,
 	type Node,
 	type Edge,
 	type Connection,
@@ -415,7 +416,7 @@ export function OrgGraphInner({activeEdges, agents}: OrgGraphInnerProps) {
 	}, []);
 
 	const groups = data?.groups ?? [];
-	const {fitView} = useReactFlow();
+	const {fitView, zoomIn, zoomOut} = useReactFlow();
 
 	const openHumanEdit = useCallback(
 		(humanId: string) => {
@@ -643,11 +644,14 @@ export function OrgGraphInner({activeEdges, agents}: OrgGraphInnerProps) {
 				className="topology-graph"
 			>
 				<Background color="hsla(230, 8%, 18%, 1)" gap={20} size={1} />
-				<Controls
-					showInteractive={false}
-					className="!bg-app-dark-box/80 !border-app-line !backdrop-blur-sm [&>button]:!bg-transparent [&>button]:!border-app-line [&>button]:!text-ink-dull [&>button:hover]:!bg-app-hover"
-				/>
 			</ReactFlow>
+
+			{/* Zoom controls */}
+			<div className="absolute bottom-4 right-4 z-10 flex flex-col gap-1">
+				<CircleButton icon={MagnifyingGlassPlus} title="Zoom in" onClick={() => zoomIn({duration: 200})} />
+				<CircleButton icon={MagnifyingGlassMinus} title="Zoom out" onClick={() => zoomOut({duration: 200})} />
+				<CircleButton icon={CornersOut} title="Fit view" onClick={() => fitView({padding: 0.3, duration: 400})} />
+			</div>
 
 			{/* Legend + controls */}
 			<div className="absolute bottom-4 left-4 z-10 rounded-md bg-app-dark-box/80 p-3 backdrop-blur-sm">
@@ -657,23 +661,6 @@ export function OrgGraphInner({activeEdges, agents}: OrgGraphInnerProps) {
 				<div className="flex flex-col gap-1 text-tiny text-ink-faint">
 					<span>Top/Bottom → Hierarchical</span>
 					<span>Left/Right → Peer</span>
-				</div>
-				<div className="mt-2 flex flex-col gap-1">
-					<button
-						onClick={handleCreateGroup}
-						className="w-full rounded bg-app-box px-2 py-1.5 text-tiny text-ink-faint hover:text-ink transition-colors text-left"
-					>
-						+ New Group
-					</button>
-					<button
-						onClick={() => {
-							const id = `human-${(data?.humans?.length ?? 0) + 1}`;
-							createHuman.mutate(id);
-						}}
-						className="w-full rounded bg-app-box px-2 py-1.5 text-tiny text-ink-faint hover:text-ink transition-colors text-left"
-					>
-						+ New Human
-					</button>
 				</div>
 			</div>
 

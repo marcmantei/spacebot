@@ -39,11 +39,11 @@ function RootLayout() {
 			<ConnectionBanner state={connectionState} hasData={hasData} />
 			<div className="flex min-h-0 flex-1">
 				<Sidebar liveStates={liveStates} />
-				<div className="flex min-w-0 flex-1 flex-col overflow-hidden pt-[10px]">
+				<div className="flex min-w-0 flex-1 flex-col overflow-hidden py-[10px] pr-[10px]">
 					{bare ? (
 						<Outlet />
 					) : (
-						<div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-tl-2xl border border-app-line bg-app">
+						<div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-app-line bg-app">
 							<Outlet />
 						</div>
 					)}

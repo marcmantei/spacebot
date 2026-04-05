@@ -1,10 +1,11 @@
 import {useMemo, useState} from "react";
-import {useQuery} from "@tanstack/react-query";
+import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
 import {Link} from "@tanstack/react-router";
-import {Sparkle, Lightbulb} from "@phosphor-icons/react";
+import {Sparkle, Lightbulb, FolderSimplePlus} from "@phosphor-icons/react";
 import {api} from "@/api/client";
 import {CreateAgentDialog} from "@/components/CreateAgentDialog";
 import {OrgGraph} from "@/components/org";
+import {Button, CircleButton} from "@spacedrive/primitives";
 import {UpdatePill} from "@/components/UpdatePill";
 import type {ChannelLiveState} from "@/hooks/useChannelLiveState";
 import {formatUptime} from "@/lib/format";
@@ -16,6 +17,27 @@ interface OverviewProps {
 
 export function Overview({liveStates, activeLinks}: OverviewProps) {
 	const [createOpen, setCreateOpen] = useState(false);
+	const queryClient = useQueryClient();
+
+	const createHuman = useMutation({
+		mutationFn: (id: string) => api.createHuman({id}),
+		onSuccess: () => {
+			queryClient.invalidateQueries({queryKey: ["topology"]});
+		},
+	});
+
+	const {data: topologyData} = useQuery({
+		queryKey: ["topology"],
+		queryFn: api.topology,
+		staleTime: 10_000,
+	});
+
+	const createGroup = useMutation({
+		mutationFn: (name: string) => api.createGroup({name, agent_ids: []}),
+		onSuccess: () => {
+			queryClient.invalidateQueries({queryKey: ["topology"]});
+		},
+	});
 
 	const {data: statusData} = useQuery({
 		queryKey: ["status"],
@@ -59,7 +81,7 @@ export function Overview({liveStates, activeLinks}: OverviewProps) {
 
 	return (
 		<div className="flex flex-col h-full">
-			<div className="flex h-12 shrink-0 items-center justify-between border-b border-app-line px-6">
+			<div className="flex h-12 shrink-0 items-center justify-between border-b border-app-line pl-6 pr-3">
 				<div className="flex items-center gap-4">
 					<div className="flex items-center gap-2">
 						<h1 className="font-plex text-sm font-medium text-ink">Spacebot</h1>
@@ -103,15 +125,32 @@ export function Overview({liveStates, activeLinks}: OverviewProps) {
 				</div>
 
 				<div className="flex items-center gap-3">
+					<CircleButton
+						icon={FolderSimplePlus}
+						title="New Group"
+						onClick={() =>
+							createGroup.mutate(
+								`Group ${(topologyData?.groups?.length ?? 0) + 1}`,
+							)
+						}
+					/>
 					<UpdatePill />
 					{providersData?.has_any && (
-						<button
+						<Button
+							variant="gray"
+							size="md"
 							onClick={() => setCreateOpen(true)}
-							className="text-tiny text-ink-faint hover:text-ink transition-colors"
 						>
-							+ New Agent
-						</button>
+							New Agent
+						</Button>
 					)}
+					<Button
+						variant="gray"
+						size="md"
+						onClick={() => createHuman.mutate(`human-${Date.now()}`)}
+					>
+						New Human
+					</Button>
 				</div>
 			</div>
 			{providersData && !providersData.has_any && agents.length > 0 && (
