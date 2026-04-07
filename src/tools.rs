@@ -697,6 +697,8 @@ pub fn create_worker_tool_server(
     runtime_config: Arc<RuntimeConfig>,
     worker_memory_mode: WorkerMemoryMode,
     memory_search: Arc<MemorySearch>,
+    wiki_write: bool,
+    wiki_store: Option<Arc<crate::wiki::WikiStore>>,
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
         .tool(ShellTool::new(workspace.clone(), sandbox.clone()))
@@ -737,11 +739,32 @@ pub fn create_worker_tool_server(
         server = server
             .tool(memory_save_with_events(
                 memory_search.clone(),
-                agent_id,
+                agent_id.clone(),
                 event_tx,
                 None,
             ))
             .tool(MemoryDeleteTool::new(memory_search));
+    }
+
+    // Conditionally add wiki tools when wiki_write is enabled.
+    if wiki_write {
+        if let Some(store) = wiki_store {
+            server = server
+                .tool(WikiCreateTool::new(
+                    store.clone(),
+                    "worker".to_string(),
+                    agent_id.to_string(),
+                ))
+                .tool(WikiEditTool::new(
+                    store.clone(),
+                    "worker".to_string(),
+                    agent_id.to_string(),
+                ))
+                .tool(WikiReadTool::new(store.clone()))
+                .tool(WikiListTool::new(store.clone()))
+                .tool(WikiSearchTool::new(store.clone()))
+                .tool(WikiHistoryTool::new(store));
+        }
     }
 
     for mcp_tool in mcp_tools {

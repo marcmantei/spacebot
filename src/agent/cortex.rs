@@ -3417,6 +3417,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
             &tool_secret_names,
             browser_config.persist_session,
             worker_status_text,
+            false, // cortex task workers don't get wiki tools
         )
         .and_then(|prompt| {
             prompt_engine.maybe_append_tool_use_enforcement(
@@ -3469,6 +3470,7 @@ async fn pickup_one_ready_task(deps: &AgentDeps, logger: &CortexLogger) -> anyho
         logs_dir,
         Vec::new(), // no initial history for cortex task workers
         crate::conversation::settings::WorkerMemoryMode::None,
+        false, // cortex task workers don't get wiki tools
         None, // No model override for cortex workers
     );
 

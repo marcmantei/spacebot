@@ -130,10 +130,12 @@ pub async fn spawn_branch_from_state(
     let routing = rc.routing.load();
     let model_name = routing.resolve(ProcessType::Branch, None).to_string();
     let tool_use_enforcement = rc.tool_use_enforcement.load();
+    let wiki_enabled = state.deps.wiki_store.is_some();
     let system_prompt = prompt_engine
         .render_branch_prompt(
             &rc.instance_dir.display().to_string(),
             &rc.workspace_dir.display().to_string(),
+            wiki_enabled,
         )
         .and_then(|prompt| {
             prompt_engine.maybe_append_tool_use_enforcement(
@@ -520,6 +522,7 @@ async fn spawn_worker_inner(
             &tool_secret_names,
             browser_config.persist_session,
             worker_status_text,
+            worker_context.wiki_write && state.deps.wiki_store.is_some(),
         )
         .map_err(|e| AgentError::Other(anyhow::anyhow!("{e}")))?;
     let skills = rc.skills.load();
@@ -616,6 +619,7 @@ async fn spawn_worker_inner(
             state.logs_dir.clone(),
             initial_history,
             worker_context.memory,
+            worker_context.wiki_write,
             worker_model_override,
         );
         let worker_id = worker.id;
@@ -642,6 +646,7 @@ async fn spawn_worker_inner(
             state.logs_dir.clone(),
             initial_history,
             worker_context.memory,
+            worker_context.wiki_write,
             worker_model_override,
         );
         state
@@ -1193,6 +1198,7 @@ pub async fn resume_idle_worker_into_state(
                     &tool_secret_names,
                     browser_config.persist_session,
                     worker_status_text,
+                    false, // resumed workers use original context; wiki not re-injected
                 )
                 .and_then(|prompt| {
                     prompt_engine.maybe_append_tool_use_enforcement(

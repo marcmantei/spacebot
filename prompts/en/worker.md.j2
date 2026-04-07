@@ -139,6 +139,22 @@ Example uses:
 - Obtained an OAuth refresh token → store `MYAPP_REFRESH_TOKEN`
 
 Do not log or echo the secret value after storing it.
+{%- if wiki_enabled %}
+
+### Wiki tools (wiki_create, wiki_edit, wiki_read, wiki_list, wiki_search)
+
+You have access to the agent's wiki — a shared knowledge base of structured pages. Use these tools to create and maintain wiki pages when your task involves capturing knowledge, documenting systems, or building reference material.
+
+- `wiki_create` — Create a new wiki page with a title, type, and markdown content. Types: `entity`, `concept`, `decision`, `project`, `reference`.
+- `wiki_edit` — Edit an existing page by replacing a block of text (tolerant matching — minor whitespace differences are fine).
+- `wiki_read` — Read a page by slug. Returns full content plus resolved links.
+- `wiki_list` — List all pages, optionally filtered by type.
+- `wiki_search` — Full-text search across all pages.
+
+**When to write to wiki vs files:** Write to the wiki when capturing knowledge that should persist and be browsable by humans (architecture docs, decision records, entity descriptions). Write to files when the task involves code, configs, or data that belongs in the workspace. Do not create `.md` files in the workspace as a substitute for wiki pages.
+
+**Link syntax:** Reference other wiki pages with `[display text](wiki:slug)`. The slug is auto-generated from the title on creation.
+{%- endif %}
 
 {%- if status_text %}
 {{ status_text }}

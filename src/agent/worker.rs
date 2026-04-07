@@ -93,6 +93,8 @@ pub struct Worker {
     pub prior_history: Option<Vec<rig::message::Message>>,
     /// Worker memory mode controlling what memory tools this worker gets.
     pub worker_memory_mode: WorkerMemoryMode,
+    /// Whether this worker has wiki write tools.
+    pub wiki_write: bool,
     /// Model override from conversation settings (per-process or blanket).
     pub model_override: Option<String>,
 }
@@ -111,6 +113,7 @@ impl Worker {
         input_rx: Option<mpsc::Receiver<String>>,
         initial_history: Vec<rig::message::Message>,
         worker_memory_mode: WorkerMemoryMode,
+        wiki_write: bool,
         model_override: Option<String>,
     ) -> (Self, mpsc::Sender<String>) {
         let id = Uuid::new_v4();
@@ -148,6 +151,7 @@ impl Worker {
                     Some(initial_history)
                 },
                 worker_memory_mode,
+                wiki_write,
                 model_override,
             },
             inject_tx,
@@ -171,6 +175,7 @@ impl Worker {
         logs_dir: PathBuf,
         initial_history: Vec<rig::message::Message>,
         worker_memory_mode: WorkerMemoryMode,
+        wiki_write: bool,
         model_override: Option<String>,
     ) -> (Self, mpsc::Sender<String>) {
         Self::build(
@@ -185,6 +190,7 @@ impl Worker {
             None,
             initial_history,
             worker_memory_mode,
+            wiki_write,
             model_override,
         )
     }
@@ -206,6 +212,7 @@ impl Worker {
         logs_dir: PathBuf,
         initial_history: Vec<rig::message::Message>,
         worker_memory_mode: WorkerMemoryMode,
+        wiki_write: bool,
         model_override: Option<String>,
     ) -> (Self, mpsc::Sender<String>, mpsc::Sender<String>) {
         let (input_tx, input_rx) = mpsc::channel(32);
@@ -221,6 +228,7 @@ impl Worker {
             Some(input_rx),
             initial_history,
             worker_memory_mode,
+            wiki_write,
             model_override,
         );
 
@@ -258,6 +266,7 @@ impl Worker {
             Some(input_rx),
             Vec::new(), // initial_history - will be replaced by prior_history below
             WorkerMemoryMode::None, // Resumed workers don't have context settings
+            false,      // Resumed workers don't get wiki tools re-injected
             None,       // Resumed workers don't have model override
         );
         // Reuse the original worker ID so DB row stays linked.
@@ -342,6 +351,8 @@ impl Worker {
             self.deps.runtime_config.clone(),
             self.worker_memory_mode,
             self.deps.memory_search.clone(),
+            self.wiki_write,
+            self.deps.wiki_store.clone(),
         );
 
         let routing = self.deps.runtime_config.routing.load();

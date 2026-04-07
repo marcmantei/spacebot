@@ -141,6 +141,10 @@ pub struct WorkerContextMode {
     pub history: WorkerHistoryMode,
     /// What memory context the worker gets.
     pub memory: WorkerMemoryMode,
+    /// Whether the worker gets wiki write tools (wiki_create, wiki_edit, wiki_read, wiki_list,
+    /// wiki_search). Enable when explicitly tasking a worker with wiki creation or maintenance.
+    #[serde(default)]
+    pub wiki_write: bool,
 }
 
 /// Per-process model overrides. Each field, when set, overrides the

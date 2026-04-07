@@ -436,6 +436,7 @@ impl Tool for DetachedSpawnWorkerTool {
                 &tool_secret_names,
                 browser_config.persist_session,
                 worker_status_text,
+                false, // detached workers don't get wiki tools
             )
             .and_then(|prompt| {
                 prompt_engine.maybe_append_tool_use_enforcement(
@@ -461,6 +462,7 @@ impl Tool for DetachedSpawnWorkerTool {
             self.logs_dir.clone(),
             Vec::new(), // no initial history for detached workers
             crate::conversation::settings::WorkerMemoryMode::None,
+            false, // detached workers don't get wiki tools by default
             None, // No model override for detached workers
         );
 
