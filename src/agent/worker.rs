@@ -522,7 +522,20 @@ impl Worker {
             }
         }
 
-        // For interactive workers, enter a follow-up loop
+        // For interactive workers, enter a follow-up loop -- but only if the
+        // worker has not already signaled a terminal outcome. Workers that called
+        // set_status(kind="outcome") are done; entering the idle loop would block
+        // forever and prevent WorkerComplete from firing (circular dependency).
+        if !resuming && self.hook.outcome_signaled() {
+            tracing::info!(
+                worker_id = %self.id,
+                "worker signaled outcome, skipping idle follow-up loop"
+            );
+            // Drop the input receiver so the channel cleans up and
+            // WorkerComplete fires normally.
+            self.input_rx.take();
+        }
+
         let mut follow_up_failure: Option<String> = None;
         if let Some(mut input_rx) = self.input_rx.take() {
             if !resuming {

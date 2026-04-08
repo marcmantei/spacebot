@@ -446,7 +446,10 @@ impl ProcessRunLogger {
         let id = worker_id.to_string();
 
         tokio::spawn(async move {
-            if let Err(error) = sqlx::query("UPDATE worker_runs SET status = 'idle' WHERE id = ?")
+            // Only transition to idle if the worker is not already in a terminal
+            // state (done/failed/completed/cancelled). This prevents a race where
+            // a fire-and-forget idle update overwrites a completed status.
+            if let Err(error) = sqlx::query("UPDATE worker_runs SET status = 'idle' WHERE id = ? AND status NOT IN ('done', 'failed', 'completed', 'cancelled')")
                 .bind(&id)
                 .execute(&pool)
                 .await
