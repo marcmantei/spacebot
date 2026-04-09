@@ -54,12 +54,21 @@ export function ApprovalModal({notification, onClose}: ApprovalModalProps) {
 		enabled: open && taskNumber !== null,
 	});
 
+	const removeNotificationFromCache = (id: string) => {
+		queryClient.setQueriesData(
+			{queryKey: NOTIFICATIONS_QUERY_KEY},
+			(old: unknown) => {
+				const data = old as {notifications?: NotificationItem[]} | undefined;
+				if (!data?.notifications) return old;
+				return {...data, notifications: data.notifications.filter((n) => n.id !== id)};
+			},
+		);
+	};
+
 	const approveMutation = useMutation({
 		mutationFn: () => api.approveTask(taskNumber!, "human"),
-		onSuccess: async () => {
-			if (notification) {
-				await api.dismissNotification(notification.id);
-			}
+		onSuccess: () => {
+			if (notification) removeNotificationFromCache(notification.id);
 			queryClient.invalidateQueries({queryKey: NOTIFICATIONS_QUERY_KEY});
 			queryClient.invalidateQueries({queryKey: ["tasks"]});
 			queryClient.invalidateQueries({queryKey: ["task", taskNumber]});
@@ -70,6 +79,7 @@ export function ApprovalModal({notification, onClose}: ApprovalModalProps) {
 	const dismissMutation = useMutation({
 		mutationFn: () => api.dismissNotification(notification!.id),
 		onSuccess: () => {
+			if (notification) removeNotificationFromCache(notification.id);
 			queryClient.invalidateQueries({queryKey: NOTIFICATIONS_QUERY_KEY});
 			onClose();
 		},

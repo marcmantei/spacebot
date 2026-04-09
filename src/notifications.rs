@@ -249,6 +249,31 @@ impl NotificationStore {
         Ok(affected > 0)
     }
 
+    /// Dismiss all active (undismissed) notifications for a given entity.
+    /// Used to automatically clean up e.g. task_approval notifications when a task is approved.
+    pub async fn dismiss_by_entity(
+        &self,
+        kind: &str,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<u64> {
+        let affected = sqlx::query(
+            "UPDATE notifications SET \
+             dismissed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), \
+             read_at = COALESCE(read_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) \
+             WHERE kind = ? AND related_entity_type = ? AND related_entity_id = ? \
+             AND dismissed_at IS NULL",
+        )
+        .bind(kind)
+        .bind(entity_type)
+        .bind(entity_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to dismiss notifications by entity")?
+        .rows_affected();
+        Ok(affected)
+    }
+
     /// Dismiss all already-read notifications. Returns the count updated.
     pub async fn dismiss_read(&self) -> Result<u64> {
         let affected = sqlx::query(
