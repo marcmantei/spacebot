@@ -72,6 +72,7 @@ pub struct Project {
     pub logo_path: Option<String>,
     pub settings: Value,
     pub status: ProjectStatus,
+    pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -230,19 +231,46 @@ impl ProjectStore {
 
     pub async fn list_projects(&self, status: Option<ProjectStatus>) -> Result<Vec<Project>> {
         let rows = if let Some(status) = status {
-            sqlx::query("SELECT * FROM projects WHERE status = ? ORDER BY updated_at DESC")
-                .bind(status.as_str())
-                .fetch_all(&self.pool)
-                .await
-                .context("failed to list projects")?
+            sqlx::query(
+                "SELECT * FROM projects WHERE status = ? ORDER BY sort_order ASC, updated_at DESC",
+            )
+            .bind(status.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .context("failed to list projects")?
         } else {
-            sqlx::query("SELECT * FROM projects ORDER BY updated_at DESC")
+            sqlx::query("SELECT * FROM projects ORDER BY sort_order ASC, updated_at DESC")
                 .fetch_all(&self.pool)
                 .await
                 .context("failed to list projects")?
         };
 
         rows.iter().map(row_to_project).collect()
+    }
+
+    /// Update the sort_order for a list of projects in a single transaction.
+    /// The caller passes IDs in the desired order; each gets sequential order values.
+    pub async fn reorder_projects(&self, ids: &[String]) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin reorder transaction")?;
+
+        for (order, id) in ids.iter().enumerate() {
+            sqlx::query("UPDATE projects SET sort_order = ? WHERE id = ?")
+                .bind(order as i64)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .context("failed to update project sort_order")?;
+        }
+
+        tx.commit()
+            .await
+            .context("failed to commit reorder transaction")?;
+
+        Ok(())
     }
 
     pub async fn update_project(
@@ -586,6 +614,7 @@ fn row_to_project(row: &sqlx::sqlite::SqliteRow) -> Result<Project> {
         logo_path: row.try_get("logo_path").unwrap_or(None),
         settings,
         status,
+        sort_order: row.try_get("sort_order").unwrap_or(0),
         created_at: row.try_get("created_at").context("missing created_at")?,
         updated_at: row.try_get("updated_at").context("missing updated_at")?,
     })

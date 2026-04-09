@@ -1,7 +1,24 @@
 import {useState, useEffect, useCallback} from "react";
 import {useNavigate} from "@tanstack/react-router";
-import {ArrowLeft, PencilSimple, Trash, Plus, FolderSimple, Clock} from "@phosphor-icons/react";
+import {ArrowLeft, PencilSimple, Trash, Plus, FolderSimple, Clock, DotsSixVertical} from "@phosphor-icons/react";
 import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
+import {
+	DndContext,
+	closestCenter,
+	KeyboardSensor,
+	PointerSensor,
+	useSensor,
+	useSensors,
+	type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+	arrayMove,
+	SortableContext,
+	sortableKeyboardCoordinates,
+	useSortable,
+	rectSortingStrategy,
+} from "@dnd-kit/sortable";
+import {CSS} from "@dnd-kit/utilities";
 import {
 	api,
 	type Project,
@@ -45,33 +62,50 @@ function formatBytes(bytes: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Project Card (list view)
+// Project Card (sortable list view)
 // ---------------------------------------------------------------------------
 
-function ProjectCard({
+function SortableProjectCard({
 	project,
 	onClick,
 }: {
 	project: Project;
 	onClick: () => void;
 }) {
+	const {attributes, listeners, setNodeRef, transform, transition, isDragging} = useSortable({
+		id: project.id,
+	});
+
 	const logoUrl = project.logo_path
 		? `${getApiBase()}/agents/projects/${encodeURIComponent(project.id)}/logo`
 		: null;
 	const fallback = project.icon || project.name.slice(0, 1).toUpperCase();
 
 	return (
-		<motion.div
-			layout
-			initial={{opacity: 0, y: 8}}
-			animate={{opacity: 1, y: 0}}
-			exit={{opacity: 0, y: -8}}
+		<div
+			ref={setNodeRef}
+			style={{
+				transform: CSS.Transform.toString(transform),
+				transition,
+				zIndex: isDragging ? 10 : undefined,
+			}}
 		>
 			<Card
 				variant="dark"
-				className="cursor-pointer p-4 transition-colors hover:bg-app-hover/50"
+				className={`group relative flex h-[100px] cursor-pointer flex-col justify-between p-4 transition-colors hover:bg-app-hover/50 ${isDragging ? "opacity-50 shadow-lg" : ""}`}
 				onClick={onClick}
 			>
+				{/* Drag handle — visible on hover */}
+				<button
+					type="button"
+					className="absolute top-2 right-2 cursor-grab touch-none rounded p-0.5 text-ink-faint/0 transition-all group-hover:text-ink-faint/50 hover:!text-ink-faint active:cursor-grabbing"
+					onClick={(e) => e.stopPropagation()}
+					{...attributes}
+					{...listeners}
+				>
+					<DotsSixVertical className="size-4" weight="bold" />
+				</button>
+
 				<div className="flex items-center gap-3">
 					{logoUrl ? (
 						<img
@@ -104,18 +138,18 @@ function ProjectCard({
 					</div>
 				</div>
 
-				<div className="mt-3 flex items-center gap-3 text-[11px] text-ink-faint">
-					<span className="flex items-center gap-1">
-						<FolderSimple className="size-3" weight="bold" />
-						<span className="font-mono">{project.root_path}</span>
+				<div className="flex items-center gap-3 text-[11px] text-ink-faint">
+					<span className="flex min-w-0 items-center gap-1">
+						<FolderSimple className="size-3 shrink-0" weight="bold" />
+						<span className="truncate font-mono">{project.root_path}</span>
 					</span>
-					<span className="flex items-center gap-1 ml-auto">
+					<span className="ml-auto flex shrink-0 items-center gap-1">
 						<Clock className="size-3" weight="bold" />
 						{formatTimeAgo(project.updated_at)}
 					</span>
 				</div>
 			</Card>
-		</motion.div>
+		</div>
 	);
 }
 
@@ -983,6 +1017,7 @@ function ProjectDetail({
 
 export function AgentProjects({ projectId }: { projectId?: string }) {
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const selectedProjectId = projectId ?? null;
 
 	const setSelectedProjectId = useCallback(
@@ -996,6 +1031,7 @@ export function AgentProjects({ projectId }: { projectId?: string }) {
 	);
 
 	const [showCreate, setShowCreate] = useState(false);
+	const [localProjects, setLocalProjects] = useState<Project[]>([]);
 
 	const {data, isLoading} = useQuery({
 		queryKey: ["projects"],
@@ -1003,7 +1039,43 @@ export function AgentProjects({ projectId }: { projectId?: string }) {
 		refetchInterval: 15_000,
 	});
 
-	const projects = data?.projects ?? [];
+	// Sync local order state from server whenever fresh data arrives,
+	// but only if we're not in the middle of a drag.
+	useEffect(() => {
+		setLocalProjects(data?.projects ?? []);
+	}, [data]);
+
+	const reorderMutation = useMutation({
+		mutationFn: (ids: string[]) => api.reorderProjects(ids),
+		onError: () => {
+			// Revert to last known server state on failure.
+			setLocalProjects(data?.projects ?? []);
+		},
+		onSuccess: () => {
+			queryClient.invalidateQueries({queryKey: ["projects"]});
+		},
+	});
+
+	const sensors = useSensors(
+		useSensor(PointerSensor, {activationConstraint: {distance: 8}}),
+		useSensor(KeyboardSensor, {coordinateGetter: sortableKeyboardCoordinates}),
+	);
+
+	const handleDragEnd = useCallback(
+		(event: DragEndEvent) => {
+			const {active, over} = event;
+			if (!over || active.id === over.id) return;
+
+			setLocalProjects((items) => {
+				const oldIndex = items.findIndex((p) => p.id === active.id);
+				const newIndex = items.findIndex((p) => p.id === over.id);
+				const reordered = arrayMove(items, oldIndex, newIndex);
+				reorderMutation.mutate(reordered.map((p) => p.id));
+				return reordered;
+			});
+		},
+		[reorderMutation],
+	);
 
 	if (selectedProjectId) {
 		return (
@@ -1021,7 +1093,7 @@ export function AgentProjects({ projectId }: { projectId?: string }) {
 				<div className="flex items-center gap-2">
 					<h2 className="text-sm font-medium text-ink">Projects</h2>
 					<span className="text-xs text-ink-faint">
-						{projects.length} project{projects.length !== 1 ? "s" : ""}
+						{localProjects.length} project{localProjects.length !== 1 ? "s" : ""}
 					</span>
 				</div>
 				<Button variant="gray" size="md" onClick={() => setShowCreate(true)}>
@@ -1036,7 +1108,7 @@ export function AgentProjects({ projectId }: { projectId?: string }) {
 						<div className="flex items-center justify-center py-20">
 							<div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
 						</div>
-					) : projects.length === 0 ? (
+					) : localProjects.length === 0 ? (
 						<div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-app-line py-20">
 							<FolderSimple className="mb-3 size-8 text-ink-faint" weight="bold" />
 							<p className="text-sm text-ink-faint">
@@ -1052,17 +1124,26 @@ export function AgentProjects({ projectId }: { projectId?: string }) {
 							</Button>
 						</div>
 					) : (
-						<div className="grid gap-3 sm:grid-cols-2">
-							<AnimatePresence mode="popLayout">
-								{projects.map((project) => (
-									<ProjectCard
-										key={project.id}
-										project={project}
-										onClick={() => setSelectedProjectId(project.id)}
-									/>
-								))}
-							</AnimatePresence>
-						</div>
+						<DndContext
+							sensors={sensors}
+							collisionDetection={closestCenter}
+							onDragEnd={handleDragEnd}
+						>
+							<SortableContext
+								items={localProjects.map((p) => p.id)}
+								strategy={rectSortingStrategy}
+							>
+								<div className="grid gap-3 sm:grid-cols-2">
+									{localProjects.map((project) => (
+										<SortableProjectCard
+											key={project.id}
+											project={project}
+											onClick={() => setSelectedProjectId(project.id)}
+										/>
+									))}
+								</div>
+							</SortableContext>
+						</DndContext>
 					)}
 				</div>
 			</div>

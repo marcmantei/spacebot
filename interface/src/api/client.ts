@@ -1213,6 +1213,7 @@ export interface Project {
 	logo_path: string | null;
 	settings: Record<string, unknown>;
 	status: ProjectStatus;
+	sort_order: number;
 	created_at: string;
 	updated_at: string;
 }
@@ -2361,6 +2362,15 @@ export const api = {
 		);
 		if (!response.ok) throw new Error(`API error: ${response.status}`);
 		return response.json() as Promise<ProjectWithRelations>;
+	},
+
+	reorderProjects: async (ids: string[]): Promise<void> => {
+		const response = await fetch(`${getApiBase()}/agents/projects/reorder`, {
+			method: "PUT",
+			headers: {"Content-Type": "application/json"},
+			body: JSON.stringify({ids}),
+		});
+		if (!response.ok) throw new Error(`API error: ${response.status}`);
 	},
 
 	projectDiskUsage: (projectId: string) =>

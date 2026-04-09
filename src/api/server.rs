@@ -150,6 +150,7 @@ pub fn api_router() -> OpenApiRouter<Arc<ApiState>> {
         .routes(routes!(wiki::restore_version))
         // Project routes
         .routes(routes!(projects::list_projects, projects::create_project))
+        .routes(routes!(projects::reorder_projects))
         .routes(routes!(
             projects::get_project,
             projects::update_project,

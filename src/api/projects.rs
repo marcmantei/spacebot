@@ -56,6 +56,12 @@ pub(super) struct ProjectListQuery {
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ReorderProjectsRequest {
+    /// Project IDs in the desired display order (first = sort_order 0).
+    ids: Vec<String>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateProjectRequest {
     name: String,
     #[serde(default)]
@@ -304,6 +310,35 @@ async fn compute_and_cache_disk_usage(
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
+
+/// PUT /agents/projects/reorder — update the sort order of all projects.
+#[utoipa::path(
+    put,
+    path = "/agents/projects/reorder",
+    request_body = ReorderProjectsRequest,
+    responses(
+        (status = 204, description = "Sort order updated"),
+        (status = 404, description = "No project store available"),
+    ),
+    tag = "projects",
+)]
+pub(super) async fn reorder_projects(
+    State(state): State<Arc<ApiState>>,
+    Json(request): Json<ReorderProjectsRequest>,
+) -> Result<StatusCode, StatusCode> {
+    let store_guard = state.project_store.load();
+    let store = store_guard.as_ref().as_ref().ok_or(StatusCode::NOT_FOUND)?;
+
+    store
+        .reorder_projects(&request.ids)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "failed to reorder projects");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
 
 /// GET /agents/projects — list projects.
 #[utoipa::path(
