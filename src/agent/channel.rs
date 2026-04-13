@@ -18,7 +18,11 @@ use crate::agent::worker::Worker;
 use crate::conversation::settings::{
     DelegationMode, MemoryMode, ResolvedConversationSettings, ResponseMode,
 };
-use crate::conversation::{ChannelStore, ConversationLogger, ProcessRunLogger};
+use crate::conversation::{
+    ActiveParticipant, ChannelStore, ConversationLogger, ProcessRunLogger,
+    participant_display_name, participant_memory_key, renderable_participants,
+    track_active_participant,
+};
 use crate::error::{AgentError, Result};
 use crate::hooks::SpacebotHook;
 use crate::llm::SpacebotModel;
@@ -60,6 +64,39 @@ struct PendingResult {
 }
 
 const EVENT_LAG_WARNING_INTERVAL_SECS: u64 = 30;
+const DECISION_MARKERS: &[&str] = &[
+    "we decided to ",
+    "i decided to ",
+    "decision:",
+    "the decision is ",
+    "approved: ",
+    "approved to ",
+    "moving forward with ",
+    "move forward with ",
+    "going with ",
+    "switching to ",
+    "we will use ",
+    "i will use ",
+    "we'll use ",
+    "i'll use ",
+    "we will switch to ",
+    "i will switch to ",
+    "we'll switch to ",
+    "i'll switch to ",
+    "we will proceed with ",
+    "i will proceed with ",
+    "we'll proceed with ",
+    "i'll proceed with ",
+];
+const CHANGE_COMPARISON_VERBS: &[&str] = &[
+    "use ",
+    "switch",
+    "adopt ",
+    "choose ",
+    "pick ",
+    "go with ",
+    "proceed with ",
+];
 
 async fn recv_channel_event(
     event_rx: &mut broadcast::Receiver<ProcessEvent>,
@@ -80,6 +117,89 @@ fn should_flush_coalesce_buffer_for_event(event: &ProcessEvent) -> bool {
             | ProcessEvent::WorkerStatus { .. }
             | ProcessEvent::WorkerComplete { .. }
     )
+}
+
+fn sentence_contains_decision_marker(sentence: &str) -> bool {
+    let sentence_lower = sentence.to_ascii_lowercase();
+    DECISION_MARKERS
+        .iter()
+        .any(|marker| sentence_lower.contains(marker))
+        || (sentence_lower.contains(" instead of ")
+            && CHANGE_COMPARISON_VERBS
+                .iter()
+                .any(|marker| sentence_lower.contains(marker)))
+}
+
+fn extract_decision_summary_from_reply(reply_text: &str) -> Option<String> {
+    let normalized = reply_text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let has_explicit_marker = DECISION_MARKERS.iter().any(|marker| lower.contains(marker));
+    let has_change_comparison = lower.contains(" instead of ")
+        && CHANGE_COMPARISON_VERBS
+            .iter()
+            .any(|marker| lower.contains(marker));
+
+    if !has_explicit_marker && !has_change_comparison {
+        return None;
+    }
+
+    let sentences: Vec<&str> = trimmed
+        .split_terminator(['.', '!', '?', '\n'])
+        .map(str::trim)
+        .filter(|sentence| !sentence.is_empty())
+        .collect();
+
+    let mut summary = sentences
+        .iter()
+        .copied()
+        .find(|sentence| sentence_contains_decision_marker(sentence))
+        .or_else(|| sentences.first().copied())
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string();
+
+    if summary.len() > 200 {
+        let boundary = summary.floor_char_boundary(200);
+        summary.truncate(boundary);
+        summary.push_str("...");
+    }
+
+    Some(summary)
+}
+
+fn decision_user_id(
+    humans: &[crate::config::HumanDef],
+    message: &InboundMessage,
+    is_retrigger: bool,
+) -> Option<String> {
+    if is_retrigger || message.source == "system" {
+        return None;
+    }
+
+    let source = message.source.trim();
+    if source.is_empty() || message.sender_id.is_empty() {
+        return None;
+    }
+
+    Some(participant_memory_key(
+        humans,
+        source,
+        message.adapter.as_deref(),
+        &message.sender_id,
+    ))
+}
+
+struct AgentTurnResult {
+    result: std::result::Result<String, rig::completion::PromptError>,
+    skip_flag: crate::tools::SkipFlag,
+    replied_flag: crate::tools::RepliedFlag,
+    retrigger_reply_preserved: bool,
+    reply_text: Option<String>,
 }
 
 /// Shared state that channel tools need to act on the channel.
@@ -133,6 +253,8 @@ pub struct ChannelState {
     /// Resolved model overrides from conversation settings.
     /// Used by branches, workers, and compactor to resolve their model.
     pub model_overrides: Arc<crate::conversation::settings::ResolvedConversationSettings>,
+    /// Active participants seen during the current channel session.
+    pub active_participants: Arc<RwLock<HashMap<String, ActiveParticipant>>>,
     /// Optional cron outcome for the `set_outcome` tool.
     /// When set, the `set_outcome` tool is registered for this channel,
     /// allowing the LLM to explicitly store a delivery payload.
@@ -535,6 +657,27 @@ impl Drop for MessageDurationGuard {
 }
 
 impl Channel {
+    fn record_decision_event(&self, reply_text: Option<&str>, user_id: Option<String>) {
+        let Some(decision_summary) = reply_text.and_then(extract_decision_summary_from_reply)
+        else {
+            return;
+        };
+
+        let mut event = self
+            .deps
+            .working_memory
+            .emit(
+                crate::memory::WorkingMemoryEventType::Decision,
+                decision_summary,
+            )
+            .channel(self.id.as_ref())
+            .importance(0.8);
+        if let Some(user_id) = user_id {
+            event = event.user(user_id);
+        }
+        event.record();
+    }
+
     /// Create a new channel.
     ///
     /// All tunable config (prompts, routing, thresholds, browser, skills) is read
@@ -604,6 +747,7 @@ impl Channel {
                 resolved_settings.worker_context.clone(),
             )),
             model_overrides: Arc::new(resolved_settings.clone()),
+            active_participants: Arc::new(RwLock::new(HashMap::new())),
             cron_outcome,
         };
 
@@ -797,11 +941,7 @@ impl Channel {
         if message.source == "system" {
             return;
         }
-        let sender_name = message
-            .metadata
-            .get("sender_display_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&message.sender_id);
+        let sender_name = participant_display_name(message);
 
         // If attachments were saved, enrich the metadata with their info
         let metadata = if let Some(saved) = saved_attachments {
@@ -816,7 +956,7 @@ impl Channel {
 
         self.state.conversation_logger.log_user_message(
             &self.state.channel_id,
-            sender_name,
+            &sender_name,
             &message.sender_id,
             raw_text,
             &metadata,
@@ -828,6 +968,16 @@ impl Channel {
 
     fn suppress_plaintext_fallback(&self) -> bool {
         matches!(self.current_adapter(), Some("email"))
+    }
+
+    async fn track_participant_from_message(&self, message: &InboundMessage) {
+        if message.source == "system" {
+            return;
+        }
+
+        let humans = self.deps.humans.load();
+        let mut participants = self.state.active_participants.write().await;
+        track_active_participant(&mut participants, humans.as_ref(), message);
     }
 
     /// Return a handle that allows external supervision to cancel this channel's
@@ -1413,11 +1563,7 @@ impl Channel {
 
         for message in &messages {
             if message.source != "system" {
-                let sender_name = message
-                    .metadata
-                    .get("sender_display_name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&message.sender_id);
+                let sender_name = participant_display_name(message);
 
                 let (raw_text, attachments) = match &message.content {
                     crate::MessageContent::Text(text) => (text.clone(), Vec::new()),
@@ -1467,7 +1613,7 @@ impl Channel {
 
                 self.state.conversation_logger.log_user_message(
                     &self.state.channel_id,
-                    sender_name,
+                    &sender_name,
                     &message.sender_id,
                     &raw_text,
                     &metadata,
@@ -1475,6 +1621,7 @@ impl Channel {
                 self.state
                     .channel_store
                     .upsert(&message.conversation_id, &metadata);
+                self.track_participant_from_message(message).await;
 
                 conversation_id = message.conversation_id.clone();
 
@@ -1614,7 +1761,7 @@ impl Channel {
         }
 
         // Run agent turn with any image/audio attachments preserved
-        let (result, skip_flag, replied_flag, _) = self
+        let turn_result = self
             .run_agent_turn(
                 &combined_text,
                 &system_prompt,
@@ -1625,8 +1772,19 @@ impl Channel {
             )
             .await?;
 
-        self.handle_agent_result(result, &skip_flag, &replied_flag, false)
-            .await;
+        self.handle_agent_result(
+            turn_result.result,
+            &turn_result.skip_flag,
+            &turn_result.replied_flag,
+            false,
+        )
+        .await;
+        if turn_result
+            .replied_flag
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.record_decision_event(turn_result.reply_text.as_deref(), None);
+        }
         // Check compaction
         if let Err(error) = self.compactor.check_and_compact().await {
             tracing::warn!(channel_id = %self.id, %error, "compaction check failed");
@@ -1650,7 +1808,6 @@ impl Channel {
         let prompt_engine = rc.prompts.load();
 
         let identity_context = rc.identity.load().render();
-        let memory_bulletin = rc.memory_bulletin.load();
         let skills = rc.skills.load();
         let skills_prompt = skills.render_channel_prompt(&prompt_engine)?;
 
@@ -1692,56 +1849,17 @@ impl Channel {
         };
 
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
+        let non_empty_option = |value: Option<String>| value.filter(|text| !text.is_empty());
 
         let project_context = self.build_project_context(&prompt_engine).await;
 
-        // Only inject memory context if not in Off mode (same guard as build_system_prompt).
-        let (working_memory, memory_bulletin_text) = if matches!(
-            self.resolved_settings.memory,
-            MemoryMode::Off
-        ) {
-            (String::new(), None)
-        } else {
-            let wm_config = **rc.working_memory.load();
-            let timezone = self.deps.working_memory.timezone();
-            let wm = match crate::memory::working::render_working_memory(
-                &self.deps.working_memory,
-                self.id.as_ref(),
-                &wm_config,
-                timezone,
-            )
-            .await
-            {
-                Ok(text) => text,
-                Err(error) => {
-                    tracing::warn!(channel_id = %self.id, %error, "working memory render failed");
-                    String::new()
-                }
-            };
-            (wm, Some(memory_bulletin.to_string()))
-        };
-
-        let channel_activity_map = if matches!(self.resolved_settings.memory, MemoryMode::Off) {
-            String::new()
-        } else {
-            let wm_config = **rc.working_memory.load();
-            let timezone = self.deps.working_memory.timezone();
-            match crate::memory::working::render_channel_activity_map(
-                &self.deps.sqlite_pool,
-                &self.deps.working_memory,
-                self.id.as_ref(),
-                &wm_config,
-                timezone,
-            )
-            .await
-            {
-                Ok(text) => text,
-                Err(error) => {
-                    tracing::warn!(channel_id = %self.id, %error, "channel activity map render failed");
-                    String::new()
-                }
-            }
-        };
+        let (
+            working_memory,
+            channel_activity_map,
+            participant_context,
+            memory_bulletin_text,
+            knowledge_synthesis_text,
+        ) = self.render_memory_layers().await;
 
         let routing = rc.routing.load();
         let model_name = routing.resolve(ProcessType::Channel, None).to_string();
@@ -1751,7 +1869,8 @@ impl Channel {
 
         let system_prompt = prompt_engine.render_channel_prompt_with_links(
             empty_to_none(identity_context),
-            memory_bulletin_text,
+            non_empty_option(memory_bulletin_text),
+            non_empty_option(knowledge_synthesis_text),
             empty_to_none(skills_prompt),
             worker_capabilities,
             self.conversation_context.clone(),
@@ -1765,6 +1884,7 @@ impl Channel {
             self.backfill_transcript.clone(),
             empty_to_none(working_memory),
             empty_to_none(channel_activity_map),
+            empty_to_none(participant_context),
             direct_mode,
         )?;
 
@@ -1871,6 +1991,7 @@ impl Channel {
             .map(|data| data.iter().map(|(meta, _)| meta.clone()).collect());
 
         self.persist_inbound_user_message(&message, &raw_text, saved_metas.as_deref());
+        self.track_participant_from_message(&message).await;
 
         // Deterministic built-in command: bypass model output drift for agent identity checks.
         if message.source != "system" && raw_text.trim() == "/agent-id" {
@@ -2030,7 +2151,7 @@ impl Channel {
             .adapter
             .as_deref()
             .or_else(|| self.current_adapter());
-        let (result, skip_flag, replied_flag, retrigger_reply_preserved) = self
+        let turn_result = self
             .run_agent_turn(
                 &user_text,
                 &system_prompt,
@@ -2041,8 +2162,22 @@ impl Channel {
             )
             .await?;
 
-        self.handle_agent_result(result, &skip_flag, &replied_flag, is_retrigger)
-            .await;
+        self.handle_agent_result(
+            turn_result.result,
+            &turn_result.skip_flag,
+            &turn_result.replied_flag,
+            is_retrigger,
+        )
+        .await;
+
+        if turn_result
+            .replied_flag
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let humans = self.deps.humans.load();
+            let user_id = decision_user_id(humans.as_ref(), &message, is_retrigger);
+            self.record_decision_event(turn_result.reply_text.as_deref(), user_id);
+        }
 
         // Safety-net: in mention-only mode, explicit mention/reply should never be dropped silently.
         if should_send_quiet_mode_fallback(
@@ -2053,8 +2188,12 @@ impl Channel {
                 invoked_by_command,
                 invoked_by_mention,
                 invoked_by_reply,
-                skip_flag: skip_flag.load(std::sync::atomic::Ordering::Relaxed),
-                replied_flag: replied_flag.load(std::sync::atomic::Ordering::Relaxed),
+                skip_flag: turn_result
+                    .skip_flag
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                replied_flag: turn_result
+                    .replied_flag
+                    .load(std::sync::atomic::Ordering::Relaxed),
             },
         ) {
             self.send_builtin_text(
@@ -2077,8 +2216,10 @@ impl Channel {
         // reply content payload, this fallback preserves a compact background
         // result record for the next user turn.
         if is_retrigger {
-            let replied = replied_flag.load(std::sync::atomic::Ordering::Relaxed);
-            if replied && retrigger_reply_preserved {
+            let replied = turn_result
+                .replied_flag
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if replied && turn_result.retrigger_reply_preserved {
                 tracing::debug!(
                     channel_id = %self.id,
                     "skipping retrigger summary injection; relay reply already preserved"
@@ -2273,6 +2414,79 @@ impl Channel {
         prompt_engine.render_org_context(org_context).ok()
     }
 
+    async fn render_memory_layers(
+        &self,
+    ) -> (String, String, String, Option<String>, Option<String>) {
+        if matches!(self.resolved_settings.memory, MemoryMode::Off) {
+            return (String::new(), String::new(), String::new(), None, None);
+        }
+
+        let rc = &self.deps.runtime_config;
+        let memory_bulletin_text = Some(rc.memory_bulletin.load().to_string());
+        let knowledge_synthesis_text = Some(rc.knowledge_synthesis.load().to_string());
+        let wm_config = **rc.working_memory.load();
+        let timezone = self.deps.working_memory.timezone();
+
+        let working_memory = match crate::memory::working::render_working_memory(
+            &self.deps.working_memory,
+            self.id.as_ref(),
+            &wm_config,
+            timezone,
+        )
+        .await
+        {
+            Ok(text) => text,
+            Err(error) => {
+                tracing::warn!(channel_id = %self.id, %error, "working memory render failed");
+                String::new()
+            }
+        };
+
+        let channel_activity_map = match crate::memory::working::render_channel_activity_map(
+            &self.deps.sqlite_pool,
+            &self.deps.working_memory,
+            self.id.as_ref(),
+            &wm_config,
+            timezone,
+        )
+        .await
+        {
+            Ok(text) => text,
+            Err(error) => {
+                tracing::warn!(channel_id = %self.id, %error, "channel activity map render failed");
+                String::new()
+            }
+        };
+
+        let participant_config = **rc.participant_context.load();
+        let tracked_participants = {
+            let participants = self.state.active_participants.read().await;
+            renderable_participants(&participants, &participant_config)
+        };
+        let participant_context = match crate::memory::working::render_participant_context(
+            &self.deps.working_memory,
+            &tracked_participants,
+            self.id.as_ref(),
+            &participant_config,
+        )
+        .await
+        {
+            Ok(text) => text,
+            Err(error) => {
+                tracing::warn!(channel_id = %self.id, %error, "participant context render failed");
+                String::new()
+            }
+        };
+
+        (
+            working_memory,
+            channel_activity_map,
+            participant_context,
+            memory_bulletin_text,
+            knowledge_synthesis_text,
+        )
+    }
+
     /// Build pre-rendered project context for prompt injection.
     ///
     /// Delegates to the standalone `build_project_context` function shared
@@ -2308,7 +2522,6 @@ impl Channel {
         let prompt_engine = rc.prompts.load();
 
         let identity_context = rc.identity.load().render();
-        let memory_bulletin = rc.memory_bulletin.load();
         let skills = rc.skills.load();
         let skills_prompt = skills.render_channel_prompt(&prompt_engine)?;
 
@@ -2345,59 +2558,13 @@ impl Channel {
 
         let project_context = self.build_project_context(&prompt_engine).await;
 
-        // Only inject memory context if not in Off mode
-        let (working_memory, channel_activity_map, memory_bulletin_text) = if matches!(
-            self.resolved_settings.memory,
-            MemoryMode::Off
-        ) {
-            (String::new(), String::new(), None)
-        } else {
-            // Render working memory layers (Layers 2 + 3).
-            let wm_config = **rc.working_memory.load();
-            let timezone = self.deps.working_memory.timezone();
-            let working_memory = match crate::memory::working::render_working_memory(
-                &self.deps.working_memory,
-                self.id.as_ref(),
-                &wm_config,
-                timezone,
-            )
-            .await
-            {
-                Ok(text) => {
-                    if text.is_empty() {
-                        tracing::debug!(channel_id = %self.id, "working memory rendered empty (disabled?)");
-                    } else {
-                        tracing::debug!(channel_id = %self.id, len = text.len(), "working memory rendered");
-                    }
-                    text
-                }
-                Err(error) => {
-                    tracing::warn!(channel_id = %self.id, %error, "working memory render failed");
-                    String::new()
-                }
-            };
-
-            let channel_activity_map = match crate::memory::working::render_channel_activity_map(
-                &self.deps.sqlite_pool,
-                &self.deps.working_memory,
-                self.id.as_ref(),
-                &wm_config,
-                timezone,
-            )
-            .await
-            {
-                Ok(text) => text,
-                Err(error) => {
-                    tracing::warn!(channel_id = %self.id, %error, "channel activity map render failed");
-                    String::new()
-                }
-            };
-
-            // In Ambient mode, we still show memory but don't trigger persistence
-            let memory_bulletin_text = Some(memory_bulletin.to_string());
-
-            (working_memory, channel_activity_map, memory_bulletin_text)
-        };
+        let (
+            working_memory,
+            channel_activity_map,
+            participant_context,
+            memory_bulletin_text,
+            knowledge_synthesis_text,
+        ) = self.render_memory_layers().await;
 
         let empty_to_none = |s: String| if s.is_empty() { None } else { Some(s) };
         let routing = rc.routing.load();
@@ -2408,6 +2575,7 @@ impl Channel {
         let system_prompt = prompt_engine.render_channel_prompt_with_links(
             empty_to_none(identity_context),
             memory_bulletin_text,
+            knowledge_synthesis_text,
             empty_to_none(skills_prompt),
             worker_capabilities,
             self.conversation_context.clone(),
@@ -2421,6 +2589,7 @@ impl Channel {
             self.backfill_transcript.clone(),
             empty_to_none(working_memory),
             empty_to_none(channel_activity_map),
+            empty_to_none(participant_context),
             direct_mode,
         )?;
 
@@ -2434,7 +2603,6 @@ impl Channel {
     /// Register per-turn tools, run the LLM agentic loop, and clean up.
     ///
     /// Returns the prompt result and per-turn flags for the caller to dispatch.
-    #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip(self, user_text, system_prompt, attachment_content), fields(channel_id = %self.id, agent_id = %self.deps.agent_id))]
     async fn run_agent_turn(
         &self,
@@ -2444,12 +2612,7 @@ impl Channel {
         attachment_content: Vec<UserContent>,
         is_retrigger: bool,
         adapter: Option<&str>,
-    ) -> Result<(
-        std::result::Result<String, rig::completion::PromptError>,
-        crate::tools::SkipFlag,
-        crate::tools::RepliedFlag,
-        bool,
-    )> {
+    ) -> Result<AgentTurnResult> {
         let skip_flag = crate::tools::new_skip_flag();
         let replied_flag = crate::tools::new_replied_flag();
         let allow_direct_reply = !self.suppress_plaintext_fallback();
@@ -2639,7 +2802,7 @@ impl Channel {
                 .await;
         }
 
-        let retrigger_reply_preserved = {
+        let applied_history = {
             let mut guard = self.state.history.write().await;
             apply_history_after_turn(
                 &result,
@@ -2677,7 +2840,13 @@ impl Channel {
             tracing::warn!(%error, "failed to flush token usage");
         }
 
-        Ok((result, skip_flag, replied_flag, retrigger_reply_preserved))
+        Ok(AgentTurnResult {
+            result,
+            skip_flag,
+            replied_flag,
+            retrigger_reply_preserved: applied_history.retrigger_reply_preserved,
+            reply_text: applied_history.reply_text,
+        })
     }
 
     /// Send outbound text and record send metrics.
@@ -3721,9 +3890,10 @@ fn is_dm_conversation_id(conv_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ObserveModeFallbackState, compute_listen_mode_invocation, is_dm_conversation_id,
-        recv_channel_event, should_process_event_for_channel,
-        should_send_discord_quiet_mode_ping_ack, should_send_quiet_mode_fallback,
+        ObserveModeFallbackState, compute_listen_mode_invocation, decision_user_id,
+        extract_decision_summary_from_reply, is_dm_conversation_id, recv_channel_event,
+        should_process_event_for_channel, should_send_discord_quiet_mode_ping_ack,
+        should_send_quiet_mode_fallback,
     };
     use crate::memory::MemoryType;
     use crate::{AgentId, ChannelId, InboundMessage, MessageContent, ProcessEvent, ProcessId};
@@ -3794,6 +3964,78 @@ mod tests {
 
         let event = recv_channel_event(&mut event_rx).await;
         assert!(matches!(event, crate::BroadcastRecvResult::Closed));
+    }
+
+    #[test]
+    fn extracts_decision_summary_from_reply_text() {
+        let summary = extract_decision_summary_from_reply(
+            "We'll switch to the new persistence trigger thresholds and remove the old 50-message cadence.",
+        );
+
+        assert_eq!(
+            summary.as_deref(),
+            Some(
+                "We'll switch to the new persistence trigger thresholds and remove the old 50-message cadence"
+            )
+        );
+        assert_eq!(
+            extract_decision_summary_from_reply(
+                "We decided to use the participant map instead of transcript scans."
+            )
+            .as_deref(),
+            Some("We decided to use the participant map instead of transcript scans")
+        );
+        assert_eq!(
+            extract_decision_summary_from_reply(
+                "Decision: move forward with the config-backed participant resolver."
+            )
+            .as_deref(),
+            Some("Decision: move forward with the config-backed participant resolver")
+        );
+        assert!(extract_decision_summary_from_reply("Here's the current status update.").is_none());
+        assert!(extract_decision_summary_from_reply("I'll check that and report back.").is_none());
+        assert!(extract_decision_summary_from_reply("Let's debug this first.").is_none());
+        assert!(extract_decision_summary_from_reply("We'll look into it tomorrow.").is_none());
+        assert!(
+            extract_decision_summary_from_reply(
+                "I approved the review comment and will follow up."
+            )
+            .is_none()
+        );
+        assert_eq!(
+            extract_decision_summary_from_reply("Got it. We'll switch to the new routing config.")
+                .as_deref(),
+            Some("We'll switch to the new routing config")
+        );
+    }
+
+    #[test]
+    fn decision_user_id_skips_retrigger_messages() {
+        let humans = vec![crate::config::HumanDef {
+            id: "victor".to_string(),
+            display_name: Some("Victor".to_string()),
+            role: None,
+            bio: None,
+            description: None,
+            discord_id: Some("12345".to_string()),
+            telegram_id: None,
+            slack_id: None,
+            email: None,
+        }];
+        let message = InboundMessage {
+            id: "message-1".to_string(),
+            source: "system".to_string(),
+            adapter: None,
+            conversation_id: "discord:chan-1".to_string(),
+            sender_id: "12345".to_string(),
+            agent_id: None,
+            content: crate::MessageContent::Text("retrigger".to_string()),
+            timestamp: chrono::Utc::now(),
+            metadata: HashMap::new(),
+            formatted_author: None,
+        };
+
+        assert!(decision_user_id(&humans, &message, true).is_none());
     }
 
     #[test]

@@ -180,6 +180,18 @@ When in doubt, skip. Being a lurker who speaks when it matters is better than be
 {{ project_context }}
 {%- endif %}
 
+{%- if working_memory %}
+{{ working_memory }}
+{%- endif %}
+
+{%- if channel_activity_map %}
+{{ channel_activity_map }}
+{%- endif %}
+
+{%- if participant_context %}
+{{ participant_context }}
+{%- endif %}
+
 {%- if knowledge_synthesis %}
 ## Knowledge Context
 
@@ -190,14 +202,6 @@ When in doubt, skip. Being a lurker who speaks when it matters is better than be
 ## Memory Context
 
 {{ memory_bulletin }}
-{%- endif %}
-
-{%- if working_memory %}
-{{ working_memory }}
-{%- endif %}
-
-{%- if channel_activity_map %}
-{{ channel_activity_map }}
 {%- endif %}
 
 {%- if conversation_context %}

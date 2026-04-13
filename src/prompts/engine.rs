@@ -554,6 +554,7 @@ impl PromptEngine {
         self.render_channel_prompt_with_links(
             identity_context,
             memory_bulletin,
+            None,
             skills_prompt,
             worker_capabilities,
             conversation_context,
@@ -561,6 +562,7 @@ impl PromptEngine {
             coalesce_hint,
             available_channels,
             sandbox_enabled,
+            None,
             None,
             None,
             None,
@@ -664,6 +666,7 @@ impl PromptEngine {
         &self,
         identity_context: Option<String>,
         memory_bulletin: Option<String>,
+        knowledge_synthesis: Option<String>,
         skills_prompt: Option<String>,
         worker_capabilities: String,
         conversation_context: Option<String>,
@@ -677,11 +680,10 @@ impl PromptEngine {
         backfill_transcript: Option<String>,
         working_memory: Option<String>,
         channel_activity_map: Option<String>,
+        participant_context: Option<String>,
         direct_mode: bool,
     ) -> Result<String> {
-        // During the transition, the bulletin is also exposed as knowledge_synthesis
-        // so the template can render it under the new heading.
-        let knowledge_synthesis = memory_bulletin.clone();
+        let knowledge_synthesis = knowledge_synthesis.or_else(|| memory_bulletin.clone());
 
         self.render(
             "channel",
@@ -701,6 +703,7 @@ impl PromptEngine {
                 backfill_transcript => backfill_transcript,
                 working_memory => working_memory,
                 channel_activity_map => channel_activity_map,
+                participant_context => participant_context,
                 knowledge_synthesis => knowledge_synthesis,
                 direct_mode => direct_mode,
             },

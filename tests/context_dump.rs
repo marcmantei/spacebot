@@ -256,6 +256,7 @@ async fn dump_channel_context() {
         )),
         worker_context_settings: Arc::new(tokio::sync::RwLock::new(Default::default())),
         model_overrides: Arc::new(Default::default()),
+        active_participants: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         cron_outcome: None,
     };
 
@@ -512,6 +513,7 @@ async fn dump_all_contexts() {
         )),
         worker_context_settings: Arc::new(tokio::sync::RwLock::new(Default::default())),
         model_overrides: Arc::new(Default::default()),
+        active_participants: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         cron_outcome: None,
     };
     let channel_tool_server = rig::tool::server::ToolServer::new().run();

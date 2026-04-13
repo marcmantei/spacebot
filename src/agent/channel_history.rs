@@ -42,7 +42,7 @@ pub(crate) fn apply_history_after_turn(
     history_len_before: usize,
     channel_id: &str,
     is_retrigger: bool,
-) -> bool {
+) -> AppliedHistory {
     match result {
         Ok(_) => {
             // prompt_once_streaming writes *history = chat_history in the Ok
@@ -53,7 +53,7 @@ pub(crate) fn apply_history_after_turn(
             // are not erased.
             let new_messages = history.into_iter().skip(history_len_before);
             guard.extend(new_messages);
-            false
+            AppliedHistory::default()
         }
         Err(rig::completion::PromptError::MaxTurnsError { chat_history, .. }) => {
             // prompt_once_streaming does NOT update `history` for MaxTurnsError.
@@ -63,7 +63,7 @@ pub(crate) fn apply_history_after_turn(
             // start, after the previous iteration's tool results were pushed).
             let new_messages = chat_history[history_len_before..].iter().cloned();
             guard.extend(new_messages);
-            false
+            AppliedHistory::default()
         }
         Err(rig::completion::PromptError::PromptCancelled { chat_history, .. }) => {
             // prompt_once_streaming does NOT update `history` for PromptCancelled.
@@ -85,7 +85,7 @@ pub(crate) fn apply_history_after_turn(
                     guard.push(rig::message::Message::Assistant {
                         id: None,
                         content: rig::OneOrMany::one(rig::message::AssistantContent::text(
-                            reply_content,
+                            reply_content.clone(),
                         )),
                     });
 
@@ -95,7 +95,10 @@ pub(crate) fn apply_history_after_turn(
                         replaced_bridge,
                         "preserved retrigger assistant reply after PromptCancelled"
                     );
-                    return true;
+                    return AppliedHistory {
+                        retrigger_reply_preserved: true,
+                        reply_text: Some(reply_content),
+                    };
                 }
 
                 tracing::debug!(
@@ -104,7 +107,7 @@ pub(crate) fn apply_history_after_turn(
                     replaced_bridge,
                     "discarding retrigger PromptCancelled messages (no reply content found)"
                 );
-                return false;
+                return AppliedHistory::default();
             }
 
             // For regular turns we preserve:
@@ -130,10 +133,23 @@ pub(crate) fn apply_history_after_turn(
                 guard.push(rig::message::Message::Assistant {
                     id: None,
                     content: rig::OneOrMany::one(rig::message::AssistantContent::text(
-                        reply_content,
+                        reply_content.clone(),
                     )),
                 });
                 preserved += 1;
+
+                tracing::debug!(
+                    channel_id = %channel_id,
+                    total_new = new_messages.len(),
+                    preserved,
+                    discarded = new_messages.len() - preserved,
+                    "preserved user message and assistant reply after PromptCancelled"
+                );
+
+                return AppliedHistory {
+                    retrigger_reply_preserved: false,
+                    reply_text: Some(reply_content),
+                };
             }
 
             tracing::debug!(
@@ -144,7 +160,7 @@ pub(crate) fn apply_history_after_turn(
                 "preserved user message and assistant reply after PromptCancelled"
             );
 
-            false
+            AppliedHistory::default()
         }
         Err(_) => {
             // Hard errors: history state is unpredictable, truncate to snapshot.
@@ -154,9 +170,15 @@ pub(crate) fn apply_history_after_turn(
                 "rolling back history after failed turn"
             );
             guard.truncate(history_len_before);
-            false
+            AppliedHistory::default()
         }
     }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct AppliedHistory {
+    pub retrigger_reply_preserved: bool,
+    pub reply_text: Option<String>,
 }
 
 pub(crate) fn pop_retrigger_bridge_message(history: &mut Vec<rig::message::Message>) -> bool {
@@ -694,7 +716,7 @@ mod tests {
         let mut expected = initial;
         expected.push(assistant_msg("Relayed branch result to user."));
         assert!(
-            preserved,
+            preserved.retrigger_reply_preserved,
             "retrigger PromptCancelled should report reply preservation"
         );
         assert_eq!(
@@ -727,7 +749,7 @@ mod tests {
             apply_history_after_turn(&err, &mut guard, history, len_before, "test", true);
 
         assert!(
-            !preserved,
+            !preserved.retrigger_reply_preserved,
             "retrigger PromptCancelled should report no reply preservation"
         );
         assert_eq!(
