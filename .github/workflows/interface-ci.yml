@@ -1,16 +1,8 @@
 name: Interface CI
 
+# Auto-triggers disabled — CI runs locally on liralot now
 on:
-  push:
-    branches: [main]
-    paths:
-      - "interface/**"
-      - ".github/workflows/interface-ci.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "interface/**"
-      - ".github/workflows/interface-ci.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
