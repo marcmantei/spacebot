@@ -317,6 +317,42 @@ where
     }
 }
 
+async fn generate_if_dirty_under_lock<ShouldGenerate, Generate, Fut>(
+    warmup_lock: &tokio::sync::Mutex<()>,
+    should_generate: ShouldGenerate,
+    generate: Generate,
+) -> BulletinRefreshOutcome
+where
+    ShouldGenerate: FnOnce() -> bool,
+    Generate: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let _warmup_guard = warmup_lock.lock().await;
+
+    if !should_generate() {
+        tracing::debug!("skipping knowledge synthesis because dirty version was already handled");
+        return BulletinRefreshOutcome::SkippedFresh;
+    }
+
+    if generate().await {
+        BulletinRefreshOutcome::Generated
+    } else {
+        BulletinRefreshOutcome::Failed
+    }
+}
+
+async fn generate_knowledge_synthesis_if_dirty_under_lock(
+    deps: &AgentDeps,
+    logger: &CortexLogger,
+) -> BulletinRefreshOutcome {
+    generate_if_dirty_under_lock(
+        deps.runtime_config.warmup_lock.as_ref(),
+        || should_regenerate_knowledge_synthesis(deps),
+        || generate_knowledge_synthesis(deps, logger),
+    )
+    .await
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BulletinRefreshOutcome {
     Generated,
@@ -2399,12 +2435,8 @@ async fn run_cortex_loop(
                     let deps = cortex.deps.clone();
                     let synthesis_logger = logger.clone();
                     refresh_task = Some(tokio::spawn(async move {
-                        let success = generate_knowledge_synthesis(&deps, &synthesis_logger).await;
-                        if success {
-                            BulletinRefreshOutcome::Generated
-                        } else {
-                            BulletinRefreshOutcome::Failed
-                        }
+                        generate_knowledge_synthesis_if_dirty_under_lock(&deps, &synthesis_logger)
+                            .await
                     }));
                 }
 
@@ -4597,14 +4629,14 @@ mod tests {
         MAINTENANCE_TASK_CANCEL_GRACE_SECS, MaintenanceTimeoutAction, ReceiverClosedBehavior,
         Signal, SynthesisTaskBackoff, WorkerTracker, apply_cancelled_warmup_status,
         build_kill_targets, claim_detached_completion, collect_synthesis_task,
-        detached_timeout_transition, handle_cortex_receiver_result, has_completed_initial_warmup,
-        is_cancelled_control_result, is_terminal_control_result, maintenance_task_timeout,
-        maintenance_timeout_action, mark_knowledge_synthesis_version_complete,
-        maybe_close_bulletin_refresh_circuit, maybe_generate_bulletin_under_lock,
-        maybe_spawn_synthesis_task, parse_structured_success_flag, push_signal_into_buffer,
-        record_bulletin_refresh_failure, should_execute_warmup,
-        should_generate_bulletin_from_bulletin_loop, signal_from_event, summarize_signal_text,
-        take_lagged_control_flag,
+        detached_timeout_transition, generate_if_dirty_under_lock, handle_cortex_receiver_result,
+        has_completed_initial_warmup, is_cancelled_control_result, is_terminal_control_result,
+        maintenance_task_timeout, maintenance_timeout_action,
+        mark_knowledge_synthesis_version_complete, maybe_close_bulletin_refresh_circuit,
+        maybe_generate_bulletin_under_lock, maybe_spawn_synthesis_task,
+        parse_structured_success_flag, push_signal_into_buffer, record_bulletin_refresh_failure,
+        should_execute_warmup, should_generate_bulletin_from_bulletin_loop, signal_from_event,
+        summarize_signal_text, take_lagged_control_flag,
     };
     use crate::ProcessEvent;
     use crate::agent::process_control::ControlActionResult;
@@ -4616,7 +4648,7 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
     use std::collections::VecDeque;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -4805,6 +4837,40 @@ mod tests {
             bulletin_age_secs: Some(10),
             ..Default::default()
         }));
+        drop(guard);
+
+        let result = task.await.expect("task should join");
+        assert_eq!(result, BulletinRefreshOutcome::SkippedFresh);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn dirty_knowledge_synthesis_rechecks_after_waiting_for_warmup_lock() {
+        let warmup_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let dirty = Arc::new(AtomicBool::new(true));
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let guard = warmup_lock.as_ref().lock().await;
+
+        let warmup_lock_for_task = Arc::clone(&warmup_lock);
+        let dirty_for_task = Arc::clone(&dirty);
+        let calls_for_task = Arc::clone(&calls);
+        let task = tokio::spawn(async move {
+            generate_if_dirty_under_lock(
+                warmup_lock_for_task.as_ref(),
+                || dirty_for_task.load(Ordering::SeqCst),
+                || async move {
+                    calls_for_task.fetch_add(1, Ordering::SeqCst);
+                    true
+                },
+            )
+            .await
+        });
+
+        // A warmup pass completes while the dirty task is waiting for the same
+        // lock. Once unblocked, the dirty task must observe the clean version
+        // and skip instead of running a duplicate synthesis.
+        dirty.store(false, Ordering::SeqCst);
         drop(guard);
 
         let result = task.await.expect("task should join");

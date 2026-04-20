@@ -23,8 +23,8 @@ Findings from CodeRabbit review + bug reports. Tracking resolution before merge.
 - [ ] **R5 — Dirty flag only bumps on merges** (`src/agent/cortex.rs:1958`)
   Prunes and decays also change the memory set but don't trigger knowledge synthesis re-gen. Add `report.pruned > 0 || report.decayed > 0`. **Partial in PR #570:** prunes and merges now dirty synthesis; decay remains intentionally importance-only and needs a follow-up decision.
 
-- [ ] **R6 — Dirty-flag synthesis not mutex-guarded** (`src/agent/cortex.rs:2106`)
-  Can race with warmup synthesis path. Should acquire the same synthesis mutex. **Still open:** PR #570 single-flights background refresh tasks, but lock parity with warmup still needs a focused verify/fix pass.
+- [x] **R6 — Dirty-flag synthesis not mutex-guarded** (`src/agent/cortex.rs:2106`)
+  Can race with warmup synthesis path. **Fixed in this slice:** dirty-triggered synthesis now acquires the warmup/synthesis mutex and re-checks the dirty version after the lock is held.
 
 - [x] **R7 — Intraday/daily synthesis blocks main cortex loop** (`src/agent/cortex.rs:2166`)
   LLM calls awaited inline inside `tokio::select!`; events stop draining during synthesis. **Fixed in PR #570:** intraday and daily synthesis now run as background tasks with single-flight scheduling and failure backoff.
