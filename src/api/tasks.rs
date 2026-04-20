@@ -481,21 +481,21 @@ pub(super) async fn create_worktree(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     // Check if worktree already exists
-    if let Some(existing) = task.metadata.get("worktree") {
-        if let Some(path) = existing.as_str() {
-            let branch = task
-                .metadata
-                .get("branch")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            return Ok(Json(WorktreeResponse {
-                task_number: number,
-                branch,
-                worktree_path: path.to_string(),
-                created: false,
-            }));
-        }
+    if let Some(existing) = task.metadata.get("worktree")
+        && let Some(path) = existing.as_str()
+    {
+        let branch = task
+            .metadata
+            .get("branch")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        return Ok(Json(WorktreeResponse {
+            task_number: number,
+            branch,
+            worktree_path: path.to_string(),
+            created: false,
+        }));
     }
 
     let branch_name = format!("task/{number}");

@@ -2156,8 +2156,8 @@ async fn run(
     // Health watchdog: exit if no messages are processed for 10 minutes.
     // systemd will restart the service automatically.
     let watchdog = spacebot::watchdog::spawn_watchdog(
-        std::time::Duration::from_secs(600),  // 10 minute timeout
-        std::time::Duration::from_secs(60),    // check every minute
+        std::time::Duration::from_secs(600), // 10 minute timeout
+        std::time::Duration::from_secs(60),  // check every minute
     );
     // Ping immediately so the watchdog doesn't trigger during initial quiet period
     watchdog.ping();

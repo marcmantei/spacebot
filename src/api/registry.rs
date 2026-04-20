@@ -190,8 +190,12 @@ pub(super) struct IssuesQuery {
     state: String,
 }
 
-fn default_issues_limit() -> usize { 50 }
-fn default_issues_state() -> String { "open".to_string() }
+fn default_issues_limit() -> usize {
+    50
+}
+fn default_issues_state() -> String {
+    "open".to_string()
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(super) struct GitHubIssue {
@@ -248,11 +252,16 @@ pub(super) async fn list_registry_issues(
     for repo_name in &target_repos {
         let output = TokioCommand::new("gh")
             .args([
-                "issue", "list",
-                "--repo", repo_name,
-                "--state", &query.state,
-                "--limit", &query.limit.to_string(),
-                "--json", "number,title,state,url,labels,assignees,createdAt,updatedAt",
+                "issue",
+                "list",
+                "--repo",
+                repo_name,
+                "--state",
+                &query.state,
+                "--limit",
+                &query.limit.to_string(),
+                "--json",
+                "number,title,state,url,labels,assignees,createdAt,updatedAt",
             ])
             .output()
             .await;

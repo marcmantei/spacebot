@@ -140,10 +140,7 @@ pub async fn run_startup_catchup(
                 crate::metadata_keys::CHANNEL_NAME.into(),
                 serde_json::Value::String(format!("github:{full_name}")),
             );
-            metadata.insert(
-                "startup_catchup".into(),
-                serde_json::Value::Bool(true),
-            );
+            metadata.insert("startup_catchup".into(), serde_json::Value::Bool(true));
 
             let message = InboundMessage {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -244,9 +241,9 @@ async fn discover_unprocessed_issues(repo: &str) -> anyhow::Result<Vec<GhIssue>>
 /// Returns a handle that should be used to report activity via
 /// `WatchdogHandle::ping()`.
 pub fn spawn_watchdog(timeout: Duration, check_interval: Duration) -> WatchdogHandle {
-    let last_activity = Arc::new(std::sync::atomic::AtomicU64::new(
-        instant_to_epoch_secs(Instant::now()),
-    ));
+    let last_activity = Arc::new(std::sync::atomic::AtomicU64::new(instant_to_epoch_secs(
+        Instant::now(),
+    )));
 
     let handle = WatchdogHandle {
         last_activity: last_activity.clone(),

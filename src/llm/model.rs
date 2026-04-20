@@ -1687,10 +1687,10 @@ fn stream_from_completion_response(
 
         for content in choice_items {
             match content {
-                AssistantContent::Text(text) => {
-                    if !text.text.is_empty() {
-                        yield Ok(RawStreamingChoice::Message(text.text));
-                    }
+                AssistantContent::Text(text)
+                    if !text.text.is_empty() =>
+                {
+                    yield Ok(RawStreamingChoice::Message(text.text));
                 }
                 AssistantContent::ToolCall(tool_call) => {
                     yield Ok(RawStreamingChoice::ToolCall(RawStreamingToolCall {
@@ -1758,10 +1758,8 @@ fn completion_choice_to_streaming_choices(
 
     for content in choice.iter() {
         match content {
-            AssistantContent::Text(text) => {
-                if !text.text.is_empty() {
-                    events.push(RawStreamingChoice::Message(text.text.clone()));
-                }
+            AssistantContent::Text(text) if !text.text.is_empty() => {
+                events.push(RawStreamingChoice::Message(text.text.clone()));
             }
             AssistantContent::ToolCall(tool_call) => {
                 events.push(RawStreamingChoice::ToolCall(RawStreamingToolCall {
@@ -2567,13 +2565,13 @@ fn parse_openai_reasoning_fallback(message: &serde_json::Value) -> Option<String
 
 fn collect_openai_text_content(value: &serde_json::Value, text_parts: &mut Vec<String>) {
     match value {
-        serde_json::Value::String(text) => {
+        serde_json::Value::String(text)
             // Use is_empty() instead of trim().is_empty() to preserve whitespace-only
             // segments. Streaming providers (e.g. Kimi) sometimes send content chunks
             // that are just spaces; dropping those causes missing spaces in output.
-            if !text.is_empty() {
-                text_parts.push(text.to_string());
-            }
+            if !text.is_empty() =>
+        {
+            text_parts.push(text.to_string());
         }
         serde_json::Value::Array(items) => {
             for item in items {
