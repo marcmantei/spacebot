@@ -1,6 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 
-export type ThemeId = "default" | "vanilla" | "midnight" | "noir" | "ember";
+export type ThemeId =
+	| "default"
+	| "vanilla"
+	| "midnight"
+	| "noir"
+	| "slate"
+	| "nord"
+	| "mocha";
 
 export interface ThemeOption {
 	id: ThemeId;
@@ -13,13 +20,13 @@ export const THEMES: ThemeOption[] = [
 	{
 		id: "default",
 		name: "Default",
-		description: "Dark theme with purple accent",
+		description: "Dark theme with blue accent",
 		className: "",
 	},
 	{
 		id: "vanilla",
 		name: "Vanilla",
-		description: "Light theme with blue accent",
+		description: "Light theme",
 		className: "vanilla-theme",
 	},
 	{
@@ -35,10 +42,22 @@ export const THEMES: ThemeOption[] = [
 		className: "noir-theme",
 	},
 	{
-		id: "ember",
-		name: "Ember",
-		description: "Dark red and orange accent theme",
-		className: "ember-theme",
+		id: "slate",
+		name: "Slate",
+		description: "Cool gray dark theme",
+		className: "slate-theme",
+	},
+	{
+		id: "nord",
+		name: "Nord",
+		description: "Arctic blue-gray theme",
+		className: "nord-theme",
+	},
+	{
+		id: "mocha",
+		name: "Mocha",
+		description: "Warm brown dark theme",
+		className: "mocha-theme",
 	},
 ];
 
