@@ -461,7 +461,7 @@ pub(super) async fn trigger_warmup(
             );
             continue;
         };
-        let Some(project_store) = state.project_store.load().as_ref().clone() else {
+        let Some(_project_store) = state.project_store.load().as_ref().clone() else {
             tracing::warn!(
                 agent_id,
                 "shared project store not initialized, skipping warmup"
