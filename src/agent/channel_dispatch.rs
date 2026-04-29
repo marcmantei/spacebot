@@ -965,7 +965,7 @@ async fn do_spawn(
                 .iter()
                 .map(|s| s.as_str())
                 .collect();
-            spawn_worker_from_state(state, &request.task, request.interactive, &skills).await
+            spawn_worker_from_state(state, &request.task, request.interactive, &skills, &WorkerContextMode::default()).await
         }
     }
 }
@@ -1004,7 +1004,7 @@ pub async fn drain_worker_queue(state: &ChannelState) -> Option<(WorkerId, Strin
                 .iter()
                 .map(|s| s.as_str())
                 .collect();
-            spawn_worker_from_state(state, &request.task, request.interactive, &skills).await
+            spawn_worker_from_state(state, &request.task, request.interactive, &skills, &WorkerContextMode::default()).await
         }
     };
 

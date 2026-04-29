@@ -576,16 +576,15 @@ pub(super) struct TaskDiffResponse {
 pub(super) async fn task_diff(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
-    Query(query): Query<TaskGetQuery>,
+
 ) -> Result<Json<TaskDiffResponse>, StatusCode> {
-    let stores = state.task_stores.load();
-    let store = stores.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let store = get_task_store(&state)?;
 
     let task = store
-        .get_by_number(&query.agent_id, number)
+        .get_by_number(number)
         .await
         .map_err(|error| {
-            tracing::warn!(%error, agent_id = %query.agent_id, task_number = number, "failed to get task for diff");
+            tracing::warn!(%error, task_number = number, "failed to get task for diff");
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -656,11 +655,10 @@ pub(super) async fn create_worktree(
     Path(number): Path<i64>,
     Json(request): Json<WorktreeRequest>,
 ) -> Result<Json<WorktreeResponse>, StatusCode> {
-    let stores = state.task_stores.load();
-    let store = stores.get(&request.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let store = get_task_store(&state)?;
 
     let task = store
-        .get_by_number(&request.agent_id, number)
+        .get_by_number(number)
         .await
         .map_err(|error| {
             tracing::warn!(%error, "failed to get task for worktree creation");
@@ -747,7 +745,6 @@ pub(super) async fn create_worktree(
 
     let updated_task = store
         .update(
-            &request.agent_id,
             number,
             crate::tasks::UpdateTaskInput {
                 metadata: Some(metadata),
@@ -761,15 +758,7 @@ pub(super) async fn create_worktree(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    state
-        .event_tx
-        .send(super::state::ApiEvent::TaskUpdated {
-            agent_id: updated_task.agent_id.clone(),
-            task_number: updated_task.task_number,
-            status: updated_task.status.to_string(),
-            action: "updated".to_string(),
-        })
-        .ok();
+    emit_task_event(&state, &updated_task, "updated");
 
     Ok(Json(WorktreeResponse {
         task_number: number,
@@ -783,13 +772,12 @@ pub(super) async fn create_worktree(
 pub(super) async fn delete_worktree(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
-    Query(query): Query<TaskGetQuery>,
+
 ) -> Result<Json<TaskActionResponse>, StatusCode> {
-    let stores = state.task_stores.load();
-    let store = stores.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let store = get_task_store(&state)?;
 
     let task = store
-        .get_by_number(&query.agent_id, number)
+        .get_by_number(number)
         .await
         .map_err(|e| {
             tracing::warn!(%e, "failed to get task for worktree deletion");
@@ -819,7 +807,6 @@ pub(super) async fn delete_worktree(
 
     store
         .update(
-            &query.agent_id,
             number,
             crate::tasks::UpdateTaskInput {
                 metadata: Some(metadata),
