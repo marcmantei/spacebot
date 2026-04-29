@@ -4,8 +4,8 @@ use super::state::ApiState;
 use super::{
     activity, agents, attachments, bindings, channels, config, cortex, cron, factory, ingest,
     links, mcp, memories, messaging, models, notifications, opencode_proxy, portal, projects,
-    providers, registry, secrets, settings, skills, ssh, system, tasks, tools, usage,
-    wiki, workers,
+    providers, registry, secrets, settings, skills, ssh, system, tasks, tools, usage, wiki,
+    workers,
 };
 
 use axum::Json;

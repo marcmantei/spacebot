@@ -576,7 +576,6 @@ pub(super) struct TaskDiffResponse {
 pub(super) async fn task_diff(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
-
 ) -> Result<Json<TaskDiffResponse>, StatusCode> {
     let store = get_task_store(&state)?;
 
@@ -772,7 +771,6 @@ pub(super) async fn create_worktree(
 pub(super) async fn delete_worktree(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
-
 ) -> Result<Json<TaskActionResponse>, StatusCode> {
     let store = get_task_store(&state)?;
 
