@@ -506,7 +506,6 @@ mod tests {
         let project_store = crate::projects::ProjectStore::new(pool);
         let project = project_store
             .create_project(crate::projects::store::CreateProjectInput {
-                agent_id: "main".into(),
                 name: "ChargePilot".into(),
                 description: String::new(),
                 icon: String::new(),

@@ -2611,7 +2611,6 @@ impl Channel {
         prompt_engine: &crate::prompts::engine::PromptEngine,
     ) -> Option<String> {
         crate::agent::channel_dispatch::build_project_context(&self.deps, prompt_engine).await
-
     }
 
     /// Build a snapshot of the system configuration for status block injection.
