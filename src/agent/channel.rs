@@ -3497,9 +3497,33 @@ impl Channel {
                     "retrigger cap reached, suppressing further retriggers until next user message"
                 );
                 // Drain any pending results into history as assistant messages
-                // so they aren't silently lost when the cap prevents a retrigger.
+                // so they aren't silently lost when the cap prevents a retrigger,
+                // AND send them directly to the user so they don't have to write
+                // again to see the results.
                 if !self.pending_results.is_empty() {
                     let results = std::mem::take(&mut self.pending_results);
+
+                    // Send results directly to the user via the channel adapter
+                    // so they see the output immediately instead of having to
+                    // write again to trigger history processing.
+                    let mut outbound_parts: Vec<String> = Vec::new();
+                    for r in &results {
+                        let emoji = if r.success { "\u{2705}" } else { "\u{274c}" };
+                        outbound_parts.push(format!("{} {}", emoji, r.result));
+                    }
+                    let outbound_text = outbound_parts.join("\n\n");
+                    self.send_outbound_text(
+                        outbound_text,
+                        "failed to send capped retrigger results to user",
+                    )
+                    .await;
+                    tracing::info!(
+                        channel_id = %self.id,
+                        count = results.len(),
+                        "retrigger cap: sent results directly to user via outbound text"
+                    );
+
+                    // Also inject into history for context continuity.
                     let mut history = self.state.history.write().await;
                     for r in &results {
                         let status = if r.success { "completed" } else { "failed" };
@@ -3512,11 +3536,6 @@ impl Channel {
                             content: OneOrMany::one(rig::message::AssistantContent::text(summary)),
                         });
                     }
-                    tracing::info!(
-                        channel_id = %self.id,
-                        count = results.len(),
-                        "injected capped results into history as assistant messages"
-                    );
                 }
             } else {
                 self.pending_retrigger = true;
