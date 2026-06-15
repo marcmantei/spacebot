@@ -31,6 +31,7 @@
 pub mod attachment_recall;
 pub mod branch_tool;
 pub mod browser;
+pub mod browser_detection;
 pub mod cancel;
 pub mod channel_recall;
 pub mod config_inspect;
@@ -951,6 +952,7 @@ pub fn create_worker_tool_server(
     memory_search: Arc<MemorySearch>,
     wiki_write: bool,
     wiki_store: Option<Arc<crate::wiki::WikiStore>>,
+    blocked_signal: Option<crate::agent::worker::BlockSignal>,
 ) -> ToolServerHandle {
     let mut server = ToolServer::new()
         .tool(
@@ -971,7 +973,7 @@ pub fn create_worker_tool_server(
             let mut status_tool =
                 SetStatusTool::new(agent_id.clone(), worker_id, channel_id, event_tx.clone());
             if let Some(store) = runtime_config.secrets.load().as_ref() {
-                status_tool = status_tool.with_tool_secrets(store.tool_secret_pairs());
+                status_tool = status_tool.with_tool_secrets(store.tool_secret_pairs(&agent_id));
             }
             status_tool
         })
@@ -980,11 +982,18 @@ pub fn create_worker_tool_server(
     server = register_file_tools(server, workspace, sandbox);
 
     if let Some(store) = runtime_config.secrets.load().as_ref() {
-        server = server.tool(SecretSetTool::new(store.clone()));
+        server = server.tool(SecretSetTool::new(store.clone(), agent_id.clone()));
     }
 
     if browser_config.enabled {
-        server = register_browser_tools(server, browser_config, screenshot_dir, &runtime_config);
+        server = register_browser_tools(
+            server,
+            browser_config,
+            screenshot_dir,
+            &runtime_config,
+            blocked_signal,
+            Some(agent_id.clone()),
+        );
     }
 
     if let Some(key) = brave_search_key {
@@ -1128,7 +1137,14 @@ pub fn create_cortex_chat_tool_server(
     server = register_file_tools(server, workspace, sandbox);
 
     if browser_config.enabled {
-        server = register_browser_tools(server, browser_config, screenshot_dir, &runtime_config);
+        server = register_browser_tools(
+            server,
+            browser_config,
+            screenshot_dir,
+            &runtime_config,
+            None,
+            Some(agent_id.clone()),
+        );
     }
 
     if let Some(key) = brave_search_key {

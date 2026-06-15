@@ -104,6 +104,7 @@ async fn bootstrap_deps() -> anyhow::Result<(spacebot::AgentDeps, spacebot::conf
             agent_config.workspace.clone(),
             &config.instance_dir,
             agent_config.data_dir.clone(),
+            agent_id.clone(),
         )
         .await,
     );
@@ -137,6 +138,7 @@ async fn bootstrap_deps() -> anyhow::Result<(spacebot::AgentDeps, spacebot::conf
         ),
         api_state: None,
         wiki_store: None,
+        wake_tx: None,
     };
 
     Ok((deps, config))
@@ -427,6 +429,7 @@ async fn dump_worker_context() {
         deps.memory_search.clone(),
         false,
         None,
+        None,
     );
 
     let tool_defs = worker_tool_server
@@ -625,6 +628,7 @@ async fn dump_all_contexts() {
         Default::default(),
         deps.memory_search.clone(),
         false,
+        None,
         None,
     );
     let worker_tool_defs = worker_tool_server.get_tool_defs(None).await.unwrap();

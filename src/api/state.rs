@@ -260,6 +260,16 @@ pub struct ApiState {
     pub task_store: ArcSwap<Option<Arc<TaskStore>>>,
     /// Instance-wide wiki knowledge base.
     pub wiki_store: ArcSwap<Option<Arc<crate::wiki::WikiStore>>>,
+    /// Wake-dispatch sender for dormant-mode agent triggers. Set at startup
+    /// when the wake manager spawns; consumed by tools / endpoints that
+    /// deliver wakes to other agents.
+    pub wake_tx: ArcSwap<Option<crate::agent::wake::WakeSender>>,
+    /// Live registry of agent ID → deps for the wake manager. Mutated by
+    /// startup, runtime agent-create, and runtime agent-delete paths so
+    /// dynamically-added agents are wakeable and removed agents stop
+    /// receiving wakes.
+    pub wake_registry:
+        Arc<tokio::sync::RwLock<std::collections::HashMap<crate::AgentId, crate::AgentDeps>>>,
     /// Instance-level shared project store.
     pub project_store: ArcSwap<Option<Arc<ProjectStore>>>,
     /// Instance-level notification store for the dashboard inbox.
@@ -535,6 +545,8 @@ impl ApiState {
             cron_schedulers: arc_swap::ArcSwap::from_pointee(HashMap::new()),
             task_store: ArcSwap::from_pointee(None),
             wiki_store: ArcSwap::from_pointee(None),
+            wake_tx: ArcSwap::from_pointee(None),
+            wake_registry: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             project_store: ArcSwap::from_pointee(None),
             notification_store: ArcSwap::from_pointee(None),
             registry_stores: arc_swap::ArcSwap::from_pointee(HashMap::new()),
