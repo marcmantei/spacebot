@@ -9,7 +9,7 @@
 //!   process exits so systemd can restart it.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
@@ -232,11 +232,44 @@ async fn discover_unprocessed_issues(repo: &str) -> anyhow::Result<Vec<GhIssue>>
 // Health watchdog
 // ---------------------------------------------------------------------------
 
-/// Spawn a background task that monitors message processing activity.
+/// Process-global activity timestamp, shared with the watchdog loop.
 ///
-/// If no messages are processed for `timeout` duration, the process exits
-/// with code 1 so systemd can restart it. The watchdog checks every
-/// `check_interval`.
+/// `spawn_watchdog` registers the same `Arc<AtomicU64>` it watches here so
+/// that *any* code path representing the daemon doing real work — not just
+/// the inbound-message router — can keep the watchdog satisfied via
+/// [`note_activity`]. This is what makes the watchdog correct on autonomous
+/// deployments (GitHub-issue/PR automation, cortex loops) that rarely or
+/// never receive an inbound platform message.
+static GLOBAL_ACTIVITY: OnceLock<Arc<std::sync::atomic::AtomicU64>> = OnceLock::new();
+
+/// Report autonomous activity (an LLM turn, a tool result, a cortex tick) to
+/// the health watchdog, resetting its timer exactly like an inbound message
+/// would. No-op until `spawn_watchdog` has registered the global timestamp,
+/// and a cheap relaxed atomic store otherwise — safe to call on hot paths.
+///
+/// Pinging only on *genuine work* (rather than from a bare timer loop) is
+/// deliberate: it keeps the watchdog able to detect a truly wedged daemon
+/// while preventing false restarts of a busy-but-quiet autonomous instance.
+pub fn note_activity() {
+    if let Some(last_activity) = GLOBAL_ACTIVITY.get() {
+        last_activity.store(
+            instant_to_epoch_secs(Instant::now()),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+}
+
+/// Spawn a background task that monitors daemon activity.
+///
+/// Activity is reported both by the inbound-message router (via
+/// [`WatchdogHandle::ping`]) and by autonomous work (via [`note_activity`]).
+/// If no activity is observed for `timeout`, the process exits with code 1
+/// so the supervisor (systemd / Docker `restart: unless-stopped`) restarts
+/// it. The watchdog checks every `check_interval`.
+///
+/// A `timeout` of zero **disables** the killer entirely (for autonomous
+/// deployments that should never self-restart); the returned handle and
+/// [`note_activity`] remain valid no-ops so callers need no special-casing.
 ///
 /// Returns a handle that should be used to report activity via
 /// `WatchdogHandle::ping()`.
@@ -245,9 +278,19 @@ pub fn spawn_watchdog(timeout: Duration, check_interval: Duration) -> WatchdogHa
         Instant::now(),
     )));
 
+    // Register the shared timestamp so `note_activity()` feeds the same value
+    // this loop watches. `set` only fails if called twice; the watchdog is
+    // spawned exactly once, so a failure is benign and ignored.
+    let _ = GLOBAL_ACTIVITY.set(last_activity.clone());
+
     let handle = WatchdogHandle {
         last_activity: last_activity.clone(),
     };
+
+    if timeout.is_zero() {
+        tracing::info!("health watchdog disabled (timeout = 0)");
+        return handle;
+    }
 
     tokio::spawn(async move {
         tracing::info!(

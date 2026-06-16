@@ -2367,11 +2367,19 @@ async fn run(
         });
     }
 
-    // Health watchdog: exit if no messages are processed for 10 minutes.
-    // systemd will restart the service automatically.
+    // Health watchdog: exit if no activity — inbound messages OR autonomous
+    // worker/cortex work (see watchdog::note_activity) — is observed for the
+    // timeout window; the supervisor (systemd / Docker) then restarts us.
+    // Configurable via SPACEBOT_WATCHDOG_TIMEOUT_SECS (default 600s; `0`
+    // disables the killer for autonomous deployments that should never
+    // self-restart).
+    let watchdog_timeout_secs = std::env::var("SPACEBOT_WATCHDOG_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(600);
     let watchdog = spacebot::watchdog::spawn_watchdog(
-        std::time::Duration::from_secs(600), // 10 minute timeout
-        std::time::Duration::from_secs(60),  // check every minute
+        std::time::Duration::from_secs(watchdog_timeout_secs),
+        std::time::Duration::from_secs(60), // check every minute
     );
     // Ping immediately so the watchdog doesn't trigger during initial quiet period
     watchdog.ping();
