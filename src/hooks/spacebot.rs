@@ -1000,6 +1000,11 @@ where
     M: CompletionModel,
 {
     async fn on_completion_call(&self, _prompt: &Message, _history: &[Message]) -> HookAction {
+        // Every LLM turn (worker or cortex-chat) is genuine daemon activity:
+        // keep the health watchdog satisfied even when no inbound platform
+        // message is arriving (autonomous deployments).
+        crate::watchdog::note_activity();
+
         if self.tool_nudge_policy.is_enabled() {
             self.completion_calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1282,6 +1287,11 @@ where
         _args: &str,
         result: &str,
     ) -> HookAction {
+        // A returning tool result is genuine work — bound long single turns
+        // (e.g. slow shell/browser tools) so they also keep the watchdog
+        // satisfied between completion calls.
+        crate::watchdog::note_activity();
+
         if tool_name == "reply"
             && let Ok(mut guard) = self.reply_tool_delta_state.lock()
         {
