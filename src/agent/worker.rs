@@ -50,6 +50,17 @@ const MAX_SEGMENTS: usize = 10;
 /// Default wall-clock budget for a worker run when no agent override is set.
 pub const DEFAULT_WORKER_WALL_CLOCK_TIMEOUT_SECS: u64 = 1800;
 
+/// Aborts a spawned task when dropped. Used by `Worker::run` to guarantee the
+/// `run_inner` task is torn down on timeout, normal completion, or external
+/// cancel (drop of `run`'s task) — so it is never left detached (#148).
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Reason a worker run was blocked by an external defense (captcha, login
 /// wall, rate-limit, fraud-detect WAF). Detection only — the agent fails
 /// cleanly and surfaces to the parent app's escalation path.
@@ -504,21 +515,41 @@ impl Worker {
 
     /// Run the worker with the configured wall-clock budget.
     ///
-    /// Wraps `run_inner` in `tokio::time::timeout`. On expiry the inner
-    /// future is dropped (cancelled mid-step) and we return
-    /// `WorkerOutcome::Timeout`, reading the segment count from the shared
-    /// atomic so the caller knows how far the worker got.
+    /// `run_inner` is driven on its OWN tokio task rather than polled inline in
+    /// the `select!` below. A synchronous, non-yielding stretch inside
+    /// `run_inner` (a tool / index call that never reaches an `.await`) would
+    /// otherwise pin THIS task's poll — starving the wall-clock timer AND
+    /// defeating `cancel_worker_with_reason`'s `handle.abort()` (both only act
+    /// at an `.await` point). That is exactly how a hung builtin worker survived
+    /// ~26h "running" past its 1800s budget (#148): the inner future never
+    /// yielded, so `run` never completed and the completion/cleanup in
+    /// `spawn_worker_task` never ran. Isolating `run_inner` onto its own task
+    /// keeps the timer (and external cancel of `run`'s task) responsive no
+    /// matter what the inner work does. On expiry / cancel the inner task is
+    /// aborted via `AbortOnDrop`; a sync-pinned inner leaks one blocking thread
+    /// until it returns or the process restarts (P0 backstop), but this worker's
+    /// pool slot and DB record are freed promptly — no zombie.
     pub async fn run(self) -> Result<WorkerOutcome> {
         let timeout_secs = self.worker_wall_clock_timeout_secs;
         let segments_tracker = self.segments_run.clone();
         let worker_id = self.id;
         let agent_id = self.deps.agent_id.clone();
 
-        let inner_fut = self.run_inner();
-        tokio::pin!(inner_fut);
+        let inner_handle = tokio::spawn(self.run_inner());
+        // Abort the inner task if `run` returns (timeout / completion) OR is
+        // dropped (external `handle.abort()` on run's task) — never detach it.
+        let _abort_inner = AbortOnDrop(inner_handle.abort_handle());
 
         tokio::select! {
-            outcome = &mut inner_fut => outcome,
+            joined = inner_handle => match joined {
+                Ok(outcome) => outcome,
+                Err(join_err) if join_err.is_cancelled() => Ok(WorkerOutcome::Cancelled {
+                    reason: "worker inner task aborted".to_string(),
+                }),
+                // Re-raise an inner panic so `spawn_worker_task`'s `catch_unwind`
+                // records it as a failure exactly as it did before this change.
+                Err(join_err) => std::panic::resume_unwind(join_err.into_panic()),
+            },
             _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
                 let segments = segments_tracker.load(std::sync::atomic::Ordering::Relaxed);
                 tracing::warn!(
@@ -1530,5 +1561,64 @@ fn build_worker_recap(messages: &[rig::message::Message]) -> String {
         "No significant actions recorded in compacted history.".into()
     } else {
         recap
+    }
+}
+
+#[cfg(test)]
+mod abort_guard_tests {
+    use super::AbortOnDrop;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    /// `AbortOnDrop` must tear down its task when dropped (the #148 guarantee
+    /// that a worker's `run_inner` is never left detached on cancel/completion).
+    #[tokio::test]
+    async fn abort_on_drop_aborts_spawned_task() {
+        let handle = tokio::spawn(async {
+            loop {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+            }
+        });
+        let abort = handle.abort_handle();
+        {
+            let _guard = AbortOnDrop(abort);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        } // guard dropped here -> inner task aborted
+        let joined = handle.await;
+        assert!(
+            joined.unwrap_err().is_cancelled(),
+            "AbortOnDrop must cancel the inner task on drop"
+        );
+    }
+
+    /// The core of the #148 fix: a synchronous, non-yielding task driven on its
+    /// OWN tokio task does NOT starve a concurrent wall-clock timer in a
+    /// `select!`. Before the fix, `run_inner` was polled inline, so a sync pin
+    /// stalled the poll and the timeout branch never fired.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timer_fires_despite_sync_pinned_inner_task() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_inner = stop.clone();
+        let inner = tokio::spawn(async move {
+            // Busy-wait synchronously, never reaching an `.await`, until the
+            // test releases it — this pins one runtime worker thread.
+            let start = Instant::now();
+            while !stop_inner.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(10) {
+                std::hint::spin_loop();
+            }
+        });
+        let _abort = AbortOnDrop(inner.abort_handle());
+
+        let timed_out = tokio::select! {
+            _ = inner => false,
+            _ = tokio::time::sleep(Duration::from_millis(100)) => true,
+        };
+
+        stop.store(true, Ordering::Relaxed); // release the busy loop
+        assert!(
+            timed_out,
+            "wall-clock timer must fire even while the inner task is sync-pinned"
+        );
     }
 }
