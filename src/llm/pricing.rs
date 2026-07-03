@@ -28,12 +28,44 @@ fn lookup_pricing(model_name: &str) -> ModelPricing {
     let per_m = |price: f64| price / 1_000_000.0;
 
     // Anthropic cache-write pricing is 1.25× input. OpenAI cache-write is same as input.
+    // ORDER IS LOAD-BEARING for the Anthropic arms: specific prefixes
+    // (claude-opus-4-8) must precede their generic parent (claude-opus-4) —
+    // the first matching arm wins.
+    // Prices verified 2026-07-03 against platform.claude.com pricing docs.
     match model {
+        m if m.starts_with("claude-fable-5") || m.starts_with("claude-mythos-5") => {
+            ModelPricing {
+                input: per_m(10.0),
+                output: per_m(50.0),
+                cached_input: per_m(1.0),
+                cache_write: per_m(12.5),
+            }
+        }
+        // Opus 4.5+ dropped to $5/$25 — only Opus 4.0/4.1 remain at $15/$75.
+        m if m.starts_with("claude-opus-4-5")
+            || m.starts_with("claude-opus-4-6")
+            || m.starts_with("claude-opus-4-7")
+            || m.starts_with("claude-opus-4-8") =>
+        {
+            ModelPricing {
+                input: per_m(5.0),
+                output: per_m(25.0),
+                cached_input: per_m(0.50),
+                cache_write: per_m(6.25),
+            }
+        }
         m if m.starts_with("claude-opus-4") => ModelPricing {
             input: per_m(15.0),
             output: per_m(75.0),
             cached_input: per_m(1.5),
             cache_write: per_m(18.75),
+        },
+        // Sonnet 5 intro pricing ($2/$10) runs through 2026-08-31, then $3/$15.
+        m if m.starts_with("claude-sonnet-5") => ModelPricing {
+            input: per_m(2.0),
+            output: per_m(10.0),
+            cached_input: per_m(0.20),
+            cache_write: per_m(2.5),
         },
         m if m.starts_with("claude-sonnet-4") => ModelPricing {
             input: per_m(3.0),
@@ -47,7 +79,15 @@ fn lookup_pricing(model_name: &str) -> ModelPricing {
             cached_input: per_m(0.30),
             cache_write: per_m(3.75),
         },
-        m if m.starts_with("claude-3-5-haiku") || m.starts_with("claude-haiku-4") => ModelPricing {
+        // Haiku 4.5 is $1/$5 — it was previously lumped in with 3.5-haiku
+        // at $0.80/$4 and under-reported by 20%.
+        m if m.starts_with("claude-haiku-4") => ModelPricing {
+            input: per_m(1.0),
+            output: per_m(5.0),
+            cached_input: per_m(0.10),
+            cache_write: per_m(1.25),
+        },
+        m if m.starts_with("claude-3-5-haiku") => ModelPricing {
             input: per_m(0.80),
             output: per_m(4.0),
             cached_input: per_m(0.08),
@@ -217,5 +257,33 @@ mod tests {
     fn test_unknown_model_uses_fallback() {
         let cost = estimate_cost("unknown-provider/mystery-model", 1000, 500, 0);
         assert!(cost > 0.0);
+    }
+
+    #[test]
+    fn test_opus_4_8_is_not_legacy_opus_priced() {
+        // Opus 4.5+ is $5/$25; the generic claude-opus-4 arm ($15/$75) must
+        // not shadow it — arm order is load-bearing.
+        let cost = estimate_cost("anthropic/claude-opus-4-8", 1_000_000, 1_000_000, 0);
+        assert!((cost - 30.0).abs() < 1e-6, "opus-4-8 should cost $5+$25, got {cost}");
+        let legacy = estimate_cost("anthropic/claude-opus-4-1-20250805", 1_000_000, 1_000_000, 0);
+        assert!((legacy - 90.0).abs() < 1e-6, "opus-4.1 should cost $15+$75, got {legacy}");
+    }
+
+    #[test]
+    fn test_fable_5_pricing() {
+        let cost = estimate_cost("anthropic/claude-fable-5", 1_000_000, 1_000_000, 0);
+        assert!((cost - 60.0).abs() < 1e-6, "fable-5 should cost $10+$50, got {cost}");
+    }
+
+    #[test]
+    fn test_sonnet_5_intro_pricing() {
+        let cost = estimate_cost("anthropic/claude-sonnet-5", 1_000_000, 1_000_000, 0);
+        assert!((cost - 12.0).abs() < 1e-6, "sonnet-5 should cost $2+$10, got {cost}");
+    }
+
+    #[test]
+    fn test_haiku_4_5_not_priced_as_3_5_haiku() {
+        let cost = estimate_cost("anthropic/claude-haiku-4-5-20251001", 1_000_000, 1_000_000, 0);
+        assert!((cost - 6.0).abs() < 1e-6, "haiku-4.5 should cost $1+$5, got {cost}");
     }
 }
