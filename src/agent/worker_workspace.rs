@@ -111,14 +111,35 @@ impl WorkerWorkspace {
         let mut worktrees = Vec::new();
 
         for source in repos {
-            // Source paths are validated as UTF-8 at discovery, so the file name
-            // is always present here.
-            let name = source
-                .file_name()
-                .and_then(|n| n.to_str())
-                .expect("discovered repo path is UTF-8")
-                .to_string();
-            let worktree = root.join(&name);
+            // UTF-8 contract (issue #224, finding [4]):
+            //
+            // Git consumes the *worktree* path as a string argument (see
+            // `add_worktree`/`remove_worktree`, which reject a non-UTF-8 path),
+            // whereas the *source* repo path is only ever passed via
+            // `Command::current_dir`, which takes an `OsStr` and so needs no
+            // UTF-8 guarantee. The two are therefore validated at different
+            // layers on purpose:
+            //   - source: only its leaf file name must be UTF-8, and that is
+            //     enforced up front in `discover_repo_dirs` (non-UTF-8 names are
+            //     skipped there), so `to_str()` on the name cannot fail here.
+            //   - worktree: the whole path must be UTF-8, enforced inside
+            //     `add_worktree`. If `shared_root` itself is non-UTF-8 the join
+            //     below is non-UTF-8 too, `add_worktree` returns an error, and
+            //     the repo is skipped like any other isolation failure.
+            //
+            // Consistency: rather than `expect()`-ing the (guaranteed) UTF-8
+            // name — which would panic if that invariant ever regressed — we
+            // degrade to the same skip-and-log path used everywhere else, so a
+            // path-encoding surprise can never take down the worker.
+            let Some(name) = source.file_name().and_then(|n| n.to_str()) else {
+                tracing::warn!(
+                    repo = %source.display(),
+                    %worker_id,
+                    "discovered repo has a non-UTF-8 name — skipping (should be unreachable: discovery filters these)"
+                );
+                continue;
+            };
+            let worktree = root.join(name);
             match add_worktree(&source, &worktree, &branch).await {
                 Ok(()) => worktrees.push(IsolatedRepo {
                     source,
@@ -260,6 +281,12 @@ async fn discover_repo_dirs(shared_root: &Path) -> Vec<PathBuf> {
 /// If a worktree already exists at the path (leaked from a prior run), it is
 /// removed first so provisioning is idempotent.
 async fn add_worktree(source: &Path, worktree_path: &Path, branch: &str) -> anyhow::Result<()> {
+    // UTF-8 contract (issue #224, finding [4]): git needs the worktree path as
+    // a string argument, so the *whole* path must be UTF-8 here — this is the
+    // counterpart to `discover_repo_dirs`, which validates only the source
+    // repo's leaf name (the source is passed via `current_dir`, an `OsStr`, and
+    // needs no UTF-8 guarantee). A non-UTF-8 path (e.g. a non-UTF-8
+    // `shared_root`) surfaces as this recoverable error and the repo is skipped.
     let worktree_str = worktree_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("worktree path is not valid UTF-8"))?;
