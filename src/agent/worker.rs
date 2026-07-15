@@ -447,7 +447,18 @@ impl Worker {
     fn tool_workspace(&self) -> PathBuf {
         match &self.isolated_workspace {
             Some(ws) if ws.has_worktrees() => ws.root().to_path_buf(),
-            _ => self.deps.runtime_config.workspace_dir.clone(),
+            Some(_) => {
+                // A workspace was provisioned but isolated no repos (empty
+                // shared workspace, or every repo failed to isolate). Fall back
+                // to the shared workspace, but log so the loss of isolation is
+                // visible rather than silent.
+                tracing::warn!(
+                    worker_id = %self.id,
+                    "isolated workspace has no worktrees — falling back to shared workspace"
+                );
+                self.deps.runtime_config.workspace_dir.clone()
+            }
+            None => self.deps.runtime_config.workspace_dir.clone(),
         }
     }
 
@@ -1103,7 +1114,9 @@ impl Worker {
         tracing::info!(worker_id = %self.id, "worker completed");
         // Successful completion: release the isolated workspace (remove its
         // worktrees). On error/timeout paths we deliberately skip this so the
-        // workspace is retained for forensics; the startup reaper bounds it.
+        // workspace is retained for forensics; the startup reaper bounds it to
+        // MAX_RETAINED_WORKSPACES (by mtime), so retained failures can't
+        // accumulate unbounded across restarts.
         if let Some(workspace) = self.isolated_workspace.take()
             && let Err(error) = workspace.release().await
         {

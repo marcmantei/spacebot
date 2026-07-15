@@ -56,9 +56,6 @@ const MAX_RETAINED_WORKSPACES: usize = 20;
 /// caller controls the success-vs-forensics policy.
 #[derive(Debug)]
 pub struct WorkerWorkspace {
-    /// The shared workspace this isolated workspace was derived from. Needed to
-    /// run `git worktree remove` from each source repo on release.
-    shared_root: PathBuf,
     /// Root of the isolated workspace (`<shared>/.spacebot/worker-workspaces/<id>`).
     root: PathBuf,
     /// The worktrees created, as `(source_repo_path, worktree_path)` pairs.
@@ -109,14 +106,18 @@ impl WorkerWorkspace {
         })?;
 
         let repos = discover_repo_dirs(shared_root).await;
+        let total_repos = repos.len();
         let branch = worker_branch_name(worker_id);
         let mut worktrees = Vec::new();
 
         for source in repos {
-            let name = match source.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name.to_string(),
-                None => continue,
-            };
+            // Source paths are validated as UTF-8 at discovery, so the file name
+            // is always present here.
+            let name = source
+                .file_name()
+                .and_then(|n| n.to_str())
+                .expect("discovered repo path is UTF-8")
+                .to_string();
             let worktree = root.join(&name);
             match add_worktree(&source, &worktree, &branch).await {
                 Ok(()) => worktrees.push(IsolatedRepo {
@@ -135,18 +136,28 @@ impl WorkerWorkspace {
             }
         }
 
-        tracing::info!(
-            %worker_id,
-            worktrees = worktrees.len(),
-            root = %root.display(),
-            "provisioned isolated worker workspace"
-        );
+        // Surface isolation completeness so partial provisioning is visible: a
+        // worker isolated for only some of its repos still shares the rest.
+        let isolated = worktrees.len();
+        if isolated < total_repos {
+            tracing::warn!(
+                %worker_id,
+                isolated,
+                total_repos,
+                root = %root.display(),
+                "provisioned PARTIALLY isolated worker workspace — some repos remain shared"
+            );
+        } else {
+            tracing::info!(
+                %worker_id,
+                isolated,
+                total_repos,
+                root = %root.display(),
+                "provisioned isolated worker workspace"
+            );
+        }
 
-        Ok(Self {
-            shared_root: shared_root.to_path_buf(),
-            root,
-            worktrees,
-        })
+        Ok(Self { root, worktrees })
     }
 
     /// Remove all worktrees and the isolated workspace directory.
@@ -181,13 +192,17 @@ impl WorkerWorkspace {
             let _ = prune_worktrees(&repo.source).await;
         }
 
-        let _ = &self.shared_root; // retained for clarity; source paths carry it.
         Ok(())
     }
 }
 
 /// The per-worker branch name used inside each isolated worktree. Namespaced so
 /// it never collides with a real feature branch and is trivially greppable.
+///
+/// The name is `spacebot/worker/<uuid>`. Both segments are always git-valid ref
+/// names: the literal prefix is fixed, and [`WorkerId`] is a UUID whose
+/// `Display` is hyphen-separated lowercase hex — never containing any of git's
+/// forbidden ref characters (space, `~^:?*[\`, `..`, etc.).
 fn worker_branch_name(worker_id: WorkerId) -> String {
     format!("spacebot/worker/{worker_id}")
 }
@@ -214,7 +229,16 @@ async fn discover_repo_dirs(shared_root: &Path) -> Vec<PathBuf> {
         }
         let name = match path.file_name().and_then(|n| n.to_str()) {
             Some(name) => name.to_string(),
-            None => continue,
+            None => {
+                // Non-UTF-8 repo directory names can't be turned into valid
+                // worktree paths for git; skip loudly rather than surfacing an
+                // opaque git error later.
+                tracing::warn!(
+                    path = %path.display(),
+                    "skipping repo with non-UTF-8 directory name"
+                );
+                continue;
+            }
         };
         if name.starts_with('.') {
             continue;
@@ -330,6 +354,12 @@ async fn delete_branch(source: &Path, branch: &str) -> anyhow::Result<()> {
 ///
 /// Called on startup so leaked worktrees don't accumulate unbounded. Also runs
 /// `git worktree prune` on each repo so git's administrative view stays clean.
+///
+/// Ordering uses directory mtime purely to pick *which* to keep; the count
+/// bound holds regardless of clock skew, so a misbehaving clock can only affect
+/// which recent workspaces survive, never whether the bound is enforced.
+/// Symlinked entries are never followed (see below), so a planted symlink can't
+/// redirect a delete outside the workspaces directory.
 pub async fn reap_orphaned(shared_root: &Path) -> anyhow::Result<usize> {
     let workspaces_dir = shared_root.join(WORKSPACES_SUBDIR);
     if !workspaces_dir.exists() {
@@ -341,14 +371,19 @@ pub async fn reap_orphaned(shared_root: &Path) -> anyhow::Result<usize> {
     let mut entries = tokio::fs::read_dir(&workspaces_dir).await?;
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
-        if !path.is_dir() {
+        // Use symlink_metadata so a symlink is never followed: we only ever
+        // reap real directories we created, never traverse a planted symlink
+        // out of the workspaces dir.
+        let meta = match tokio::fs::symlink_metadata(&path).await {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        if !meta.is_dir() {
+            // Skips regular files and symlinks (symlink_metadata reports the
+            // link itself, whose file type is symlink, not dir).
             continue;
         }
-        let mtime = entry
-            .metadata()
-            .await
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::UNIX_EPOCH);
+        let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
         dirs.push((mtime, path));
     }
 
@@ -514,6 +549,40 @@ mod tests {
             .await
             .expect("provision");
         assert!(!ws.has_worktrees());
+        ws.release().await.expect("release");
+    }
+
+    /// A repo that cannot be isolated (its `.git` is present but not a valid
+    /// repository) is skipped, and the workspace reports it isolated fewer
+    /// repos than were discovered — the partial-isolation signal from #224.
+    #[tokio::test]
+    async fn partial_isolation_skips_unisolable_repo() {
+        let (shared, _good) = make_shared_workspace_with_repo("app").await;
+
+        // A second directory that looks like a repo (has a `.git` directory)
+        // but is corrupt, so `git worktree add` fails for it.
+        let broken = shared.path().join("broken");
+        tokio::fs::create_dir_all(broken.join(".git"))
+            .await
+            .unwrap();
+
+        let ws = WorkerWorkspace::provision(shared.path(), Uuid::new_v4())
+            .await
+            .expect("provision");
+
+        // The good repo is isolated; the broken one is skipped, not fatal.
+        assert!(ws.has_worktrees(), "the healthy repo is still isolated");
+        assert_eq!(
+            ws.worktrees.len(),
+            1,
+            "only the healthy repo isolated; broken repo skipped"
+        );
+        assert!(ws.root().join("app").join(".git").exists());
+        assert!(
+            !ws.root().join("broken").exists(),
+            "the unisolable repo left no worktree"
+        );
+
         ws.release().await.expect("release");
     }
 

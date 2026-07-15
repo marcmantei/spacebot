@@ -42,6 +42,18 @@ commit can never contain files this worker did not touch:
 - If the working tree is unexpectedly dirty at handout (files you did not
   create), stop and investigate rather than committing over them.
 
+Anti-pattern (what caused #211/#218/#219):
+
+```sh
+# BAD — sweeps up whatever else is dirty in the tree, including sibling edits
+git add -A && git commit -m "..."
+
+# GOOD — stage only what you changed, then verify before committing
+git add src/foo.rs src/bar.rs
+git status --porcelain   # confirm every staged path is yours
+git commit -m "..."
+```
+
 ## Migration Safety
 
 - Never edit an existing file in `migrations/`.

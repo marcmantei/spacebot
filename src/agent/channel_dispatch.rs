@@ -649,8 +649,10 @@ async fn attach_isolated_workspace(worker: Worker, shared_workspace: &std::path:
         Ok(workspace) => worker.with_isolated_workspace(workspace),
         Err(error) => {
             tracing::warn!(
-                %error,
+                error = %error,
+                error_debug = ?error,
                 worker_id = %worker.id,
+                shared_workspace = %shared_workspace.display(),
                 "failed to provision isolated workspace — worker will use shared workspace"
             );
             worker
