@@ -444,18 +444,55 @@ impl Worker {
 
     /// The base directory the worker's tools should use: the isolated
     /// workspace when one was provisioned, otherwise the shared workspace.
+    ///
+    /// # Non-recoverable degradation guard (issue #224, finding [1])
+    ///
+    /// When an isolated workspace was provisioned we must not *silently* fall
+    /// back to the shared checkout — that would re-introduce the exact
+    /// cross-worker contamination race #224 exists to prevent. We consult the
+    /// workspace's [`Isolation`](crate::agent::worker_workspace::Isolation)
+    /// completeness signal (finding [3]) to tell apart:
+    ///   - **complete isolation** (every repo isolated, or the degenerate
+    ///     no-repo case): safe to use the isolated root, or safe to fall back to
+    ///     the shared workspace when the isolated root is empty because there was
+    ///     genuinely nothing to isolate.
+    ///   - **incomplete isolation** (repos existed but some/all failed): a
+    ///     `debug_assert!` trips in debug builds because this is a programmer- or
+    ///     environment-level fault the provisioning path should have surfaced;
+    ///     in release builds we log at `error` (not `warn`) so the loss of
+    ///     isolation is loud and greppable rather than silent, then fall back.
     fn tool_workspace(&self) -> PathBuf {
         match &self.isolated_workspace {
             Some(ws) if ws.has_worktrees() => ws.root().to_path_buf(),
-            Some(_) => {
-                // A workspace was provisioned but isolated no repos (empty
-                // shared workspace, or every repo failed to isolate). Fall back
-                // to the shared workspace, but log so the loss of isolation is
-                // visible rather than silent.
-                tracing::warn!(
-                    worker_id = %self.id,
-                    "isolated workspace has no worktrees — falling back to shared workspace"
+            Some(ws) => {
+                // A workspace was provisioned but isolated no repos. This is
+                // only safe when there was genuinely nothing to isolate
+                // (`Isolation::Fully` over zero repos). If repos existed and
+                // none isolated, falling back to the shared workspace silently
+                // degrades — treat that as non-recoverable in debug and loud in
+                // release. See the guard doc above.
+                let isolation = ws.isolation();
+                debug_assert!(
+                    isolation.is_complete(),
+                    "isolated workspace provisioned with no worktrees despite \
+                     repos being present ({isolation:?}) — silent fallback to the \
+                     shared checkout would re-open issue #224"
                 );
+                if !isolation.is_complete() {
+                    tracing::error!(
+                        worker_id = %self.id,
+                        ?isolation,
+                        "isolated workspace has no worktrees but repos were present — \
+                         isolation FAILED; falling back to shared workspace (this can \
+                         re-open the #224 contamination race)"
+                    );
+                } else {
+                    tracing::warn!(
+                        worker_id = %self.id,
+                        "isolated workspace has no worktrees (nothing to isolate) — \
+                         falling back to shared workspace"
+                    );
+                }
                 self.deps.runtime_config.workspace_dir.clone()
             }
             None => self.deps.runtime_config.workspace_dir.clone(),
