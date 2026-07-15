@@ -60,6 +60,67 @@ pub struct WorkerWorkspace {
     root: PathBuf,
     /// The worktrees created, as `(source_repo_path, worktree_path)` pairs.
     worktrees: Vec<IsolatedRepo>,
+    /// Completeness of isolation: whether every discovered repo was isolated.
+    /// Callers consult this (via [`Self::isolation`]) to decide whether it is
+    /// safe to use the workspace or whether isolation silently degraded — see
+    /// [`Isolation`] and finding [1]/[3] of issue #224.
+    isolation: Isolation,
+}
+
+/// The result of provisioning a worker workspace, carrying an explicit
+/// completeness signal alongside the workspace itself.
+///
+/// # Why the caller needs this (issue #224, finding [3])
+///
+/// [`WorkerWorkspace::provision`] never fails just because a repo could not be
+/// isolated — partial isolation is strictly better than the shared checkout, so
+/// per-repo failures are logged and skipped. But that means the returned
+/// [`WorkerWorkspace`] alone cannot tell the caller *whether isolation was
+/// actually achieved for every repo that existed*. Without that signal a caller
+/// cannot distinguish three materially different situations:
+///
+/// - [`Isolation::Fully`] — every discovered repo got its own worktree, or there
+///   were no repos at all (the degenerate single-worker case). Safe.
+/// - [`Isolation::Partial`] — repos existed and at least one, but not all, were
+///   isolated. The un-isolated repos are still shared: a worker touching them
+///   can contaminate a sibling.
+/// - [`Isolation::None`] — repos existed but none could be isolated. Falling
+///   back to the shared workspace here silently re-introduces the exact race
+///   #224 set out to eliminate.
+///
+/// The completeness contract lets `Worker::tool_workspace` refuse to silently
+/// degrade (finding [1]) instead of transparently sharing the checkout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Isolation {
+    /// Every discovered repo was isolated (or there were no repos to isolate).
+    Fully,
+    /// Some but not all discovered repos were isolated; the rest remain shared.
+    Partial { isolated: usize, total: usize },
+    /// Repos were discovered but none could be isolated.
+    None { total: usize },
+}
+
+impl Isolation {
+    /// Classify the provisioning outcome from the counts of isolated vs
+    /// discovered repos.
+    fn classify(isolated: usize, total: usize) -> Self {
+        match (isolated, total) {
+            (_, 0) => Isolation::Fully,
+            (i, t) if i == t => Isolation::Fully,
+            (0, t) => Isolation::None { total: t },
+            (i, t) => Isolation::Partial {
+                isolated: i,
+                total: t,
+            },
+        }
+    }
+
+    /// Whether the workspace is safe to use as-is without re-introducing the
+    /// #224 cross-worker contamination race. Only [`Isolation::Fully`] is safe;
+    /// any partial or missing isolation leaves some repo shared.
+    pub fn is_complete(self) -> bool {
+        matches!(self, Isolation::Fully)
+    }
 }
 
 /// One repo mirrored into an isolated workspace as a git worktree.
@@ -86,6 +147,18 @@ impl WorkerWorkspace {
         !self.worktrees.is_empty()
     }
 
+    /// The completeness of this workspace's isolation.
+    ///
+    /// This is the completeness signal from finding [3] of issue #224: unlike
+    /// [`Self::has_worktrees`] (which only says whether *some* worktree exists),
+    /// this distinguishes full isolation from partial isolation from a total
+    /// failure to isolate any of the repos that were present. Callers use it to
+    /// refuse to silently degrade to the shared checkout when isolation was
+    /// requested but did not fully succeed. See [`Isolation`].
+    pub fn isolation(&self) -> Isolation {
+        self.isolation
+    }
+
     /// Provision an isolated workspace for `worker_id` off `shared_root`.
     ///
     /// Discovers git repos directly under `shared_root` and adds a per-worker
@@ -97,6 +170,14 @@ impl WorkerWorkspace {
     /// workspace root). A repo that fails to isolate is logged and skipped
     /// rather than failing the whole worker — partial isolation is strictly
     /// better than the shared checkout.
+    ///
+    /// # Completeness contract (issue #224, finding [3])
+    ///
+    /// Because per-repo failures are non-fatal, a successful `Ok(_)` does **not**
+    /// imply every repo is isolated. The returned workspace carries an explicit
+    /// [`Isolation`] signal (read via [`Self::isolation`]) so the caller can tell
+    /// full isolation from partial isolation from a total failure and decide
+    /// whether it is safe to proceed rather than silently sharing the checkout.
     pub async fn provision(shared_root: &Path, worker_id: WorkerId) -> anyhow::Result<Self> {
         let root = shared_root
             .join(WORKSPACES_SUBDIR)
@@ -160,6 +241,7 @@ impl WorkerWorkspace {
         // Surface isolation completeness so partial provisioning is visible: a
         // worker isolated for only some of its repos still shares the rest.
         let isolated = worktrees.len();
+        let isolation = Isolation::classify(isolated, total_repos);
         if isolated < total_repos {
             tracing::warn!(
                 %worker_id,
@@ -178,7 +260,11 @@ impl WorkerWorkspace {
             );
         }
 
-        Ok(Self { root, worktrees })
+        Ok(Self {
+            root,
+            worktrees,
+            isolation,
+        })
     }
 
     /// Remove all worktrees and the isolated workspace directory.
@@ -482,6 +568,12 @@ mod tests {
             .expect("provision");
 
         assert!(ws.has_worktrees(), "expected one isolated worktree");
+        assert_eq!(
+            ws.isolation(),
+            Isolation::Fully,
+            "the sole repo isolated — fully complete"
+        );
+        assert!(ws.isolation().is_complete());
         let isolated_repo = ws.root().join("app");
         assert!(isolated_repo.join(".git").exists(), "worktree checked out");
         // The isolated worktree is NOT the shared checkout.
@@ -576,6 +668,10 @@ mod tests {
             .await
             .expect("provision");
         assert!(!ws.has_worktrees());
+        // No repos to isolate is the safe degenerate case: still "fully"
+        // isolated (nothing was left shared), so callers may fall back cleanly.
+        assert_eq!(ws.isolation(), Isolation::Fully);
+        assert!(ws.isolation().is_complete());
         ws.release().await.expect("release");
     }
 
@@ -604,6 +700,17 @@ mod tests {
             1,
             "only the healthy repo isolated; broken repo skipped"
         );
+        // The completeness signal (#224 finding [3]) reports partial isolation:
+        // one of two discovered repos isolated. `is_complete()` is false so a
+        // caller must not silently treat this as fully isolated.
+        assert_eq!(
+            ws.isolation(),
+            Isolation::Partial {
+                isolated: 1,
+                total: 2
+            },
+        );
+        assert!(!ws.isolation().is_complete());
         assert!(ws.root().join("app").join(".git").exists());
         assert!(
             !ws.root().join("broken").exists(),

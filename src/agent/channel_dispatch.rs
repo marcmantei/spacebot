@@ -642,6 +642,19 @@ pub async fn spawn_worker_from_state(
 /// concurrent workers can't see or clobber each other's edits. Provisioning is
 /// best-effort: on failure the worker is returned unchanged and falls back to
 /// the shared workspace, so a provisioning hiccup never blocks dispatch.
+///
+/// # Completeness contract (issue #224, finding [3])
+///
+/// A successful `provision(..)` does **not** guarantee every repo was isolated —
+/// per-repo failures are logged and skipped rather than made fatal. The returned
+/// [`WorkerWorkspace`](crate::agent::worker_workspace::WorkerWorkspace) carries
+/// an explicit [`Isolation`](crate::agent::worker_workspace::Isolation) signal
+/// (read via `.isolation()`) recording whether isolation was *complete*,
+/// *partial*, or *absent*. We attach the workspace regardless so the worker
+/// still benefits from whatever isolation was achieved; the worker's
+/// `tool_workspace` selection then consults that signal and refuses to
+/// *silently* fall back to the shared checkout when isolation was incomplete
+/// (finding [1]).
 async fn attach_isolated_workspace(worker: Worker, shared_workspace: &std::path::Path) -> Worker {
     match crate::agent::worker_workspace::WorkerWorkspace::provision(shared_workspace, worker.id)
         .await
