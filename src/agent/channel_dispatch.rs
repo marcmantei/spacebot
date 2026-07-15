@@ -636,6 +636,28 @@ pub async fn spawn_worker_from_state(
     result
 }
 
+/// Provision and attach a per-worker isolated workspace (issue #224).
+///
+/// Gives the worker its own `git worktree` per repo in `shared_workspace`, so
+/// concurrent workers can't see or clobber each other's edits. Provisioning is
+/// best-effort: on failure the worker is returned unchanged and falls back to
+/// the shared workspace, so a provisioning hiccup never blocks dispatch.
+async fn attach_isolated_workspace(worker: Worker, shared_workspace: &std::path::Path) -> Worker {
+    match crate::agent::worker_workspace::WorkerWorkspace::provision(shared_workspace, worker.id)
+        .await
+    {
+        Ok(workspace) => worker.with_isolated_workspace(workspace),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                worker_id = %worker.id,
+                "failed to provision isolated workspace — worker will use shared workspace"
+            );
+            worker
+        }
+    }
+}
+
 /// Inner implementation of worker spawning, separated so the caller can
 /// handle task reservation cleanup in a single place.
 async fn spawn_worker_inner(
@@ -763,6 +785,13 @@ async fn spawn_worker_inner(
         .resolve_model("worker")
         .map(String::from);
 
+    // Provision a per-worker isolated workspace (issue #224): each worker
+    // gets its own `git worktree` per repo so concurrent workers can't see or
+    // clobber each other's edits. Best-effort — if provisioning fails, the
+    // worker falls back to the shared workspace with a warning rather than
+    // failing dispatch.
+    let shared_workspace = state.deps.runtime_config.workspace_dir.clone();
+
     let worker = if interactive {
         let (worker, input_tx, inject_tx) = Worker::new_interactive(
             Some(state.channel_id.clone()),
@@ -778,6 +807,7 @@ async fn spawn_worker_inner(
             worker_context.wiki_write,
             worker_model_override,
         );
+        let worker = attach_isolated_workspace(worker, &shared_workspace).await;
         let worker_id = worker.id;
         state
             .worker_inputs
@@ -805,6 +835,7 @@ async fn spawn_worker_inner(
             worker_context.wiki_write,
             worker_model_override,
         );
+        let worker = attach_isolated_workspace(worker, &shared_workspace).await;
         state
             .worker_injections
             .write()

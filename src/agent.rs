@@ -18,6 +18,7 @@ pub mod prompt_snapshot;
 pub mod status;
 pub mod wake;
 pub mod worker;
+pub mod worker_workspace;
 
 pub(crate) fn panic_payload_to_string(panic_payload: &(dyn std::any::Any + Send)) -> String {
     panic_payload
