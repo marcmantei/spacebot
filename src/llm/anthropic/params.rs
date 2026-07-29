@@ -19,12 +19,25 @@ pub struct AnthropicRequest {
     pub original_tools: Vec<(String, String)>,
 }
 
-/// Adaptive thinking is only available on 4.6-generation models.
+/// Adaptive thinking is available on every 4.6-generation-and-later model —
+/// the API rejects the old `{type: "enabled", budget_tokens: N}` shape on
+/// these and only accepts `{type: "adaptive"}` (or the field omitted, which
+/// silently runs without thinking). Checked by family/prefix rather than a
+/// single generation string so onboarding a new model is one line here, not
+/// a parallel gating rewrite. Was previously scoped to literal "4-6"/"4.6"
+/// only, which silently missed Opus 4.7, Opus 4.8, and Opus 5 — those
+/// workers ran with no `thinking` param at all until this fix (2026-07-29).
 fn supports_adaptive_thinking(model_id: &str) -> bool {
-    model_id.contains("opus-4-6")
-        || model_id.contains("opus-4.6")
-        || model_id.contains("sonnet-4-6")
-        || model_id.contains("sonnet-4.6")
+    const ADAPTIVE_ONLY_FRAGMENTS: &[&str] = &[
+        "opus-4-6", "opus-4.6",
+        "opus-4-7", "opus-4.7",
+        "opus-4-8", "opus-4.8",
+        "opus-5",
+        "sonnet-4-6", "sonnet-4.6",
+        "sonnet-5",
+        "fable-5", "mythos-5",
+    ];
+    ADAPTIVE_ONLY_FRAGMENTS.iter().any(|f| model_id.contains(*f))
 }
 
 fn is_opus(model_id: &str) -> bool {
@@ -217,5 +230,19 @@ mod tests {
         assert!(!supports_adaptive_thinking("claude-sonnet-4-5"));
         assert!(!supports_adaptive_thinking("claude-opus-4-0"));
         assert!(!supports_adaptive_thinking("gpt-4o"));
+    }
+
+    #[test]
+    fn adaptive_thinking_detected_for_opus_5_and_the_rest_of_the_4_6plus_family() {
+        // Regression test: the original gate only matched literal "4-6",
+        // silently missing every later adaptive-only model — Opus 4.7, Opus
+        // 4.8, and Opus 5 (the current worker default) all ran with no
+        // `thinking` param at all before this fix.
+        assert!(supports_adaptive_thinking("anthropic/claude-opus-5"));
+        assert!(supports_adaptive_thinking("claude-opus-4-7"));
+        assert!(supports_adaptive_thinking("claude-opus-4-8"));
+        assert!(supports_adaptive_thinking("anthropic/claude-sonnet-5"));
+        assert!(supports_adaptive_thinking("claude-fable-5"));
+        assert!(supports_adaptive_thinking("claude-mythos-5"));
     }
 }

@@ -31,7 +31,8 @@ fn lookup_pricing(model_name: &str) -> ModelPricing {
     // ORDER IS LOAD-BEARING for the Anthropic arms: specific prefixes
     // (claude-opus-4-8) must precede their generic parent (claude-opus-4) —
     // the first matching arm wins.
-    // Prices verified 2026-07-03 against platform.claude.com pricing docs.
+    // Prices verified 2026-07-29 against platform.claude.com pricing docs
+    // (Claude Opus 5 confirmed $5/$25 — same tier as Opus 4.5+).
     match model {
         m if m.starts_with("claude-fable-5") || m.starts_with("claude-mythos-5") => {
             ModelPricing {
@@ -41,8 +42,9 @@ fn lookup_pricing(model_name: &str) -> ModelPricing {
                 cache_write: per_m(12.5),
             }
         }
-        // Opus 4.5+ dropped to $5/$25 — only Opus 4.0/4.1 remain at $15/$75.
-        m if m.starts_with("claude-opus-4-5")
+        // Opus 5 and Opus 4.5+ are $5/$25 — only Opus 4.0/4.1 remain at $15/$75.
+        m if m.starts_with("claude-opus-5")
+            || m.starts_with("claude-opus-4-5")
             || m.starts_with("claude-opus-4-6")
             || m.starts_with("claude-opus-4-7")
             || m.starts_with("claude-opus-4-8") =>
@@ -267,6 +269,14 @@ mod tests {
         assert!((cost - 30.0).abs() < 1e-6, "opus-4-8 should cost $5+$25, got {cost}");
         let legacy = estimate_cost("anthropic/claude-opus-4-1-20250805", 1_000_000, 1_000_000, 0);
         assert!((legacy - 90.0).abs() < 1e-6, "opus-4.1 should cost $15+$75, got {legacy}");
+    }
+
+    #[test]
+    fn test_opus_5_pricing() {
+        // Opus 5 replaced Opus 4.8 as the worker default (2026-07-29) but is
+        // priced the same: $5+$25, not the legacy $15+$75 claude-opus-4 arm.
+        let cost = estimate_cost("anthropic/claude-opus-5", 1_000_000, 1_000_000, 0);
+        assert!((cost - 30.0).abs() < 1e-6, "opus-5 should cost $5+$25, got {cost}");
     }
 
     #[test]
