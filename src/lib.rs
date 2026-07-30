@@ -21,6 +21,7 @@ pub mod messaging;
 pub mod notifications;
 pub mod openai_auth;
 pub mod opencode;
+pub mod process;
 pub mod projects;
 pub mod prompts;
 pub mod registry;

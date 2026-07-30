@@ -34,6 +34,14 @@ pub(super) struct StatusResponse {
     version: &'static str,
     pid: u32,
     uptime_seconds: u64,
+    /// Processes in the zombie state. Should stay near zero; a climbing value
+    /// means orphans are not being reaped and the PID table will fill up.
+    /// Absent where `/proc` is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    zombie_processes: Option<usize>,
+    /// Orphans collected by the built-in reaper since startup. Zero when a real
+    /// init (systemd, `docker run --init`) owns the reaping instead.
+    reaped_orphans: u64,
 }
 
 #[utoipa::path(
@@ -91,6 +99,8 @@ pub(super) async fn status(State(state): State<Arc<ApiState>>) -> Json<StatusRes
         version: env!("CARGO_PKG_VERSION"),
         pid: std::process::id(),
         uptime_seconds: uptime.as_secs(),
+        zombie_processes: crate::process::reaper::zombie_count(),
+        reaped_orphans: crate::process::reaper::reaped_count(),
     })
 }
 

@@ -1823,6 +1823,12 @@ async fn run(
         api_state.set_secrets_store(store.clone());
     }
 
+    // Reap orphaned processes when running as PID 1 (containers). Shell
+    // commands leave grandchildren behind that are re-parented to this process;
+    // without an init to collect them they accumulate as zombies until the PID
+    // table is exhausted. No-op when a real init is present.
+    spacebot::process::reaper::spawn();
+
     // Start background update checker
     spacebot::update::spawn_update_checker(api_state.update_status.clone());
 
