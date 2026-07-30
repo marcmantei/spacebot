@@ -471,10 +471,10 @@ async fn run_streaming(
     })?;
 
     // Claim the PID so the orphan reaper leaves this child's exit status to
-    // Tokio. Dropping the guard at the end of this function also sweeps, which
-    // collects the child in the paths below where `wait()` times out and the
-    // `Child` is dropped without ever being awaited.
-    let _owned = child
+    // Tokio. Held until this function returns; dropping the claim also reaps
+    // the PID, which collects the child in the paths below where `wait()` times
+    // out and the `Child` is dropped without ever being awaited.
+    let _reaper_claim = child
         .id()
         .map(|pid| crate::process::reaper::claim(pid as i32));
 

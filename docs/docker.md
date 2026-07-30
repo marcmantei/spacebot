@@ -26,11 +26,12 @@ There is one published image: `ghcr.io/spacedriveapp/spacebot`.
 
 ## Process Model
 
-Spacebot runs as PID 1 in the container, which makes it the namespace's init: it
-inherits every orphaned process, not just the ones it spawned. Shell commands
-routinely leave grandchildren behind (`sh -c "cargo build"` exits, its
-`cargo`/`node`/build-script descendants outlive it), and an init that never
-reaps turns each one into a zombie holding a PID for the life of the container.
+`tini` is PID 1 and spacebot runs as its direct child. That split matters:
+whichever process holds PID 1 is the namespace's init and inherits every
+orphaned process, not just the ones it spawned. Shell commands routinely leave
+grandchildren behind (`sh -c "cargo build"` exits, its `cargo`/`node`/build-script
+descendants outlive it), and an init that never reaps turns each one into a
+zombie holding a PID for the life of the container.
 
 Two layers prevent that:
 
@@ -38,10 +39,10 @@ Two layers prevent that:
   re-parented to it, including processes spawned before spacebot starts or after
   it stops.
 - **Spacebot's own reaper** (`src/process/reaper.rs`) — a `SIGCHLD`-driven sweep
-  that runs when spacebot *is* PID 1 (bare `docker run` without `--init`, or any
-  deployment that bypasses the entrypoint). It enumerates children from `/proc`
-  and reaps each one that no spawn site has claimed, so a child Tokio is waiting
-  on always keeps its exit status.
+  that runs only when spacebot *itself* holds PID 1, which happens if the
+  entrypoint is overridden. It enumerates children from `/proc` and reaps each
+  one that no spawn site has claimed, so a child Tokio is waiting on always
+  keeps its exit status.
 
 Check the current state without `docker exec`:
 
