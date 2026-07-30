@@ -224,8 +224,11 @@ fn reap_orphans() {
 /// Reap a single exited child, if it has exited. Never blocks.
 fn reap_one(pid: i32) {
     let mut status: libc::c_int = 0;
-    // SAFETY: `waitpid` writes only through `status`, a valid local. WNOHANG
-    // makes the call non-blocking, so the async runtime is never stalled.
+    // SAFETY: `status` is a valid, properly aligned `c_int` stack local that
+    // outlives the call, and `waitpid` writes at most one `c_int` through it —
+    // so the only pointer we hand to libc is sound for the write it performs.
+    // WNOHANG makes the call non-blocking, so the async runtime is never
+    // stalled.
     let reaped = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
 
     match reaped {
