@@ -80,6 +80,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gh \
     bubblewrap \
     openssh-server \
+    # tini — minimal init that reaps orphaned processes (see ENTRYPOINT below)
+    tini \
     # Chrome runtime dependencies — required whether Chrome is system-installed
     # or downloaded by the built-in fetcher. The fetcher provides the browser
     # binary; these are the shared libraries it links against.
@@ -112,5 +114,10 @@ EXPOSE 19898 18789 9090
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:19898/api/health || exit 1
 
-ENTRYPOINT ["docker-entrypoint.sh"]
+# tini as PID 1 so orphaned grandchildren are always reaped, even before
+# spacebot's own reaper starts or if it ever stops. Spacebot reaps orphans
+# itself (see src/process/reaper.rs); tini is the belt-and-braces layer that
+# also covers the window during startup and shutdown. `-g` forwards signals to
+# the whole process group so shutdown stays clean.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "docker-entrypoint.sh"]
 CMD ["spacebot", "start", "--foreground"]

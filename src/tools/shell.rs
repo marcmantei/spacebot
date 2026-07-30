@@ -470,6 +470,14 @@ async fn run_streaming(
         exit_code: -1,
     })?;
 
+    // Claim the PID so the orphan reaper leaves this child's exit status to
+    // Tokio. Dropping the guard at the end of this function also sweeps, which
+    // collects the child in the paths below where `wait()` times out and the
+    // `Child` is dropped without ever being awaited.
+    let _owned = child
+        .id()
+        .map(|pid| crate::process::reaper::claim(pid as i32));
+
     let stdout_pipe = child.stdout.take().ok_or_else(|| ShellError {
         message: "Failed to capture stdout".to_string(),
         exit_code: -1,

@@ -24,6 +24,36 @@ There is one published image: `ghcr.io/spacedriveapp/spacebot`.
 - Browser support is built in: Chromium is downloaded on first browser-tool use and cached under `/data`
 - Legacy `-slim` / `-full` tags are deprecated
 
+## Process Model
+
+Spacebot runs as PID 1 in the container, which makes it the namespace's init: it
+inherits every orphaned process, not just the ones it spawned. Shell commands
+routinely leave grandchildren behind (`sh -c "cargo build"` exits, its
+`cargo`/`node`/build-script descendants outlive it), and an init that never
+reaps turns each one into a zombie holding a PID for the life of the container.
+
+Two layers prevent that:
+
+- **`tini` as PID 1** (`ENTRYPOINT`) — a real init that reaps anything
+  re-parented to it, including processes spawned before spacebot starts or after
+  it stops.
+- **Spacebot's own reaper** (`src/process/reaper.rs`) — a `SIGCHLD`-driven sweep
+  that runs when spacebot *is* PID 1 (bare `docker run` without `--init`, or any
+  deployment that bypasses the entrypoint). It enumerates children from `/proc`
+  and reaps each one that no spawn site has claimed, so a child Tokio is waiting
+  on always keeps its exit status.
+
+Check the current state without `docker exec`:
+
+```bash
+curl -s http://localhost:19898/api/status | jq '{zombie_processes, reaped_orphans}'
+```
+
+`zombie_processes` should stay near zero. A climbing value means orphans are not
+being collected and the PID table will eventually fill, at which point no new
+process can spawn — worker launches fail for a reason that looks nothing like
+the cause.
+
 ## Data Volume
 
 All persistent data lives at `/data` inside the container. Mount a volume here.
