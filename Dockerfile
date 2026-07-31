@@ -82,6 +82,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     # tini — minimal init that reaps orphaned processes (see ENTRYPOINT below)
     tini \
+    # python3 — the interpreter agents actually invoke from shell tool calls
+    # (`python3 -m pytest …`, inline scripts). debian:bookworm-slim ships no
+    # interpreter at all, so without this every Python invocation exits 127 —
+    # which reads as "the command failed", not "the command does not exist",
+    # and is routinely misread as a failing test suite (shipyard#99, #485).
+    python3 \
+    python3-pip \
     # Chrome runtime dependencies — required whether Chrome is system-installed
     # or downloaded by the built-in fetcher. The fetcher provides the browser
     # binary; these are the shared libraries it links against.
