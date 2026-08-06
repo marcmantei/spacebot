@@ -126,6 +126,20 @@ impl UsageAccumulator {
         Self::default()
     }
 
+    /// Move the accumulated usage out, leaving this accumulator empty.
+    ///
+    /// Makes flushing safe to attempt more than once (#33). The worker now
+    /// flushes from a single exit point that every ending passes through, and
+    /// the timeout branch can race an inner task that already flushed —
+    /// draining on read means the second attempt finds nothing rather than
+    /// writing the same tokens twice.
+    ///
+    /// A worker that flushes incrementally later gets the same property for
+    /// free: each flush persists only what accrued since the last one.
+    pub fn take(&mut self) -> Self {
+        std::mem::take(self)
+    }
+
     /// Record one API call's usage.
     pub fn add(&mut self, usage: ExtendedUsage, model: &str, provider: &str, cost: f64) {
         self.input_tokens += usage.input_tokens;
@@ -310,5 +324,102 @@ mod tests {
         assert_eq!(usage.cache_read_tokens, 300);
         assert_eq!(usage.cache_write_tokens, 200);
         assert_eq!(usage.reasoning_tokens, 100);
+    }
+
+    // ── take(): the double-count guard for the single-exit flush (#33) ──────
+
+    fn sample(model: &str) -> (ExtendedUsage, &str, &str, f64) {
+        (
+            ExtendedUsage {
+                input_tokens: 1000,
+                output_tokens: 500,
+                cache_read_tokens: 200,
+                cache_write_tokens: 100,
+                reasoning_tokens: 50,
+            },
+            model,
+            "anthropic",
+            0.25,
+        )
+    }
+
+    #[test]
+    fn test_take_moves_the_usage_out() {
+        let mut acc = UsageAccumulator::new();
+        let (usage, model, provider, cost) = sample("claude-sonnet-5");
+        acc.add(usage, model, provider, cost);
+
+        let taken = acc.take();
+
+        // Everything that was accumulated comes out...
+        assert_eq!(taken.input_tokens, 1000);
+        assert_eq!(taken.output_tokens, 500);
+        assert_eq!(taken.request_count, 1);
+        assert!(taken.has_usage());
+        // ...and the accumulator is left empty.
+        assert_eq!(acc.input_tokens, 0);
+        assert_eq!(acc.request_count, 0);
+        assert!(!acc.has_usage());
+    }
+
+    #[test]
+    fn test_take_twice_yields_nothing_the_second_time() {
+        // The property the single-exit flush relies on: `run` flushes after the
+        // `select!`, and the timeout branch can race an inner task that already
+        // flushed. Draining on read means the loser writes nothing rather than
+        // writing the same tokens a second time.
+        let mut acc = UsageAccumulator::new();
+        let (usage, model, provider, cost) = sample("claude-sonnet-5");
+        acc.add(usage, model, provider, cost);
+
+        let first = acc.take();
+        let second = acc.take();
+
+        assert!(first.has_usage());
+        assert!(!second.has_usage(), "a second flush must find nothing to write");
+        assert_eq!(second.request_count, 0);
+        assert_eq!(second.input_tokens, 0);
+    }
+
+    #[test]
+    fn test_take_preserves_the_total_across_incremental_flushes() {
+        // Whatever the split, the sum of what is written equals what was spent
+        // — no tokens lost between flushes, none counted twice.
+        let mut acc = UsageAccumulator::new();
+        let (usage, model, provider, cost) = sample("claude-sonnet-5");
+
+        acc.add(usage, model, provider, cost);
+        acc.add(usage, model, provider, cost);
+        let first = acc.take(); // an incremental flush mid-run
+
+        acc.add(usage, model, provider, cost);
+        let second = acc.take(); // the terminal flush
+
+        assert_eq!(first.request_count + second.request_count, 3);
+        assert_eq!(first.input_tokens + second.input_tokens, 3000);
+        assert_eq!(first.output_tokens + second.output_tokens, 1500);
+    }
+
+    #[test]
+    fn test_take_on_an_empty_accumulator_is_harmless() {
+        // A worker that died before its first LLM call still reaches the flush.
+        let mut acc = UsageAccumulator::new();
+        let taken = acc.take();
+        assert!(!taken.has_usage(), "nothing accumulated, nothing to flush");
+    }
+
+    #[test]
+    fn test_take_carries_the_model_and_provider() {
+        // flush() derives the `model` column from these — a taken accumulator
+        // must still know which model it was, or the row lands as "unknown".
+        let mut acc = UsageAccumulator::new();
+        let (usage, _, provider, cost) = sample("x");
+        acc.add(usage, "claude-opus-5", provider, cost);
+        acc.add(usage, "claude-opus-5", provider, cost);
+        acc.add(usage, "claude-haiku-4-5", provider, cost);
+
+        let taken = acc.take();
+        assert_eq!(taken.primary_model(), "claude-opus-5");
+        assert_eq!(taken.provider.as_deref(), Some("anthropic"));
     }
 }

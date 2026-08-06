@@ -535,12 +535,42 @@ impl Worker {
         let worker_id = self.id;
         let agent_id = self.deps.agent_id.clone();
 
-        let inner_handle = tokio::spawn(self.run_inner());
+        // Token usage is accumulated here, not inside `run_inner`, so that the
+        // flush below can reach it on EVERY exit (#33).
+        //
+        // It used to be created in `run_inner` and flushed on the success path
+        // only, which lost the cost of every other ending:
+        //
+        //   * `Failed` / `Blocked` returned early, before the flush
+        //   * a wall-clock timeout aborts the inner task from the `select!`
+        //     below — nothing inside it ever runs again
+        //   * a kill or panic takes the in-memory accumulator with it
+        //
+        // Measured on 2026-08-04: 21 workers ran, 4 wrote a row. The two most
+        // expensive runs of the day — 45m/202 tool calls and 1h59m/130 tool
+        // calls — both recorded $0, because both died. Cost reporting therefore
+        // hid exactly the failures worth seeing, and a thrashing loop looked
+        // *cheaper* than a working one.
+        //
+        // Note both early returns already call `persist_transcript`: the
+        // transcript was considered worth keeping on failure, the cost was not.
+        let usage_accumulator = std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::llm::usage::UsageAccumulator::new(),
+        ));
+        // Cloned before `self` is moved into the spawned task.
+        let flush_pool = self.deps.sqlite_pool.clone();
+        let flush_agent_id = self.deps.agent_id.clone();
+        let flush_channel_id = self.channel_id.clone();
+
+        let inner_handle = tokio::spawn(self.run_inner(usage_accumulator.clone()));
         // Abort the inner task if `run` returns (timeout / completion) OR is
         // dropped (external `handle.abort()` on run's task) — never detach it.
         let _abort_inner = AbortOnDrop(inner_handle.abort_handle());
 
-        tokio::select! {
+        // A panic is re-raised rather than returned, so it cannot go through
+        // the shared flush below — flush before unwinding instead. Everything
+        // else falls through to the single flush after the `select!`.
+        let outcome = tokio::select! {
             joined = inner_handle => match joined {
                 Ok(outcome) => outcome,
                 Err(join_err) if join_err.is_cancelled() => Ok(WorkerOutcome::Cancelled {
@@ -548,7 +578,14 @@ impl Worker {
                 }),
                 // Re-raise an inner panic so `spawn_worker_task`'s `catch_unwind`
                 // records it as a failure exactly as it did before this change.
-                Err(join_err) => std::panic::resume_unwind(join_err.into_panic()),
+                Err(join_err) => {
+                    Self::flush_usage(
+                        &usage_accumulator, &flush_pool, &flush_agent_id,
+                        flush_channel_id.as_deref(),
+                    )
+                    .await;
+                    std::panic::resume_unwind(join_err.into_panic())
+                }
             },
             _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
                 let segments = segments_tracker.load(std::sync::atomic::Ordering::Relaxed);
@@ -564,6 +601,41 @@ impl Worker {
                     segments_run: segments,
                 })
             }
+        };
+
+        // The single exit. Whatever the worker did — finished, failed, was
+        // blocked, timed out, or was cancelled — its spend is recorded here.
+        Self::flush_usage(
+            &usage_accumulator, &flush_pool, &flush_agent_id,
+            flush_channel_id.as_deref(),
+        )
+        .await;
+
+        outcome
+    }
+
+    /// Persist whatever the worker spent. Idempotent and never fatal.
+    ///
+    /// `UsageAccumulator::flush` no-ops when nothing was accumulated, so the
+    /// timeout branch calling this after the inner task already flushed cannot
+    /// double-count — `take()` empties the accumulator as it reads it.
+    ///
+    /// A failure here is logged, never propagated: losing the cost record is
+    /// bad, failing the worker over it is worse.
+    async fn flush_usage(
+        accumulator: &std::sync::Arc<tokio::sync::Mutex<crate::llm::usage::UsageAccumulator>>,
+        pool: &sqlx::SqlitePool,
+        agent_id: &str,
+        channel_id: Option<&str>,
+    ) {
+        let mut acc = accumulator.lock().await;
+        let pending = acc.take();
+        drop(acc);
+        if !pending.has_usage() {
+            return;
+        }
+        if let Err(error) = pending.flush(pool, agent_id, "worker", channel_id).await {
+            tracing::warn!(%error, "failed to flush worker token usage");
         }
     }
 
@@ -573,7 +645,10 @@ impl Worker {
     /// and compacts if the worker is approaching the context window limit.
     /// This prevents long-running workers from dying mid-task due to context
     /// exhaustion.
-    async fn run_inner(mut self) -> Result<WorkerOutcome> {
+    async fn run_inner(
+        mut self,
+        usage_accumulator: std::sync::Arc<tokio::sync::Mutex<crate::llm::usage::UsageAccumulator>>,
+    ) -> Result<WorkerOutcome> {
         // Wire the injection receiver into the hook so `on_completion_call`
         // can drain pending injected context before each LLM turn.
         if let Some(inject_rx) = self.inject_rx.take() {
@@ -621,9 +696,9 @@ impl Worker {
             .as_deref()
             .unwrap_or_else(|| routing.resolve(ProcessType::Worker, None))
             .to_string();
-        let usage_accumulator = std::sync::Arc::new(tokio::sync::Mutex::new(
-            crate::llm::usage::UsageAccumulator::new(),
-        ));
+        // The accumulator is owned by `run`, which flushes it from a single
+        // exit every ending passes through (#33). Creating one here again
+        // would make the model write into an accumulator nothing ever reads.
         let model = SpacebotModel::make(&self.deps.llm_manager, &model_name)
             .with_context(&*self.deps.agent_id, "worker")
             .with_worker_type("builtin")
@@ -1082,19 +1157,10 @@ impl Worker {
         // Persist transcript blob
         self.persist_transcript(&compacted_history, &history).await;
 
-        // Flush accumulated token usage.
-        let acc = usage_accumulator.lock().await;
-        if let Err(error) = acc
-            .flush(
-                &self.deps.sqlite_pool,
-                &self.deps.agent_id,
-                "worker",
-                self.channel_id.as_deref(),
-            )
-            .await
-        {
-            tracing::warn!(%error, "failed to flush worker token usage");
-        }
+        // Token usage is NOT flushed here. `run` flushes from a single exit
+        // that every ending reaches, so the success path needs no special
+        // case — and adding one back here would be the bug this fixed (#33):
+        // whoever adds the next early return would have to remember to copy it.
 
         tracing::info!(worker_id = %self.id, "worker completed");
         if hit_max_segments {
