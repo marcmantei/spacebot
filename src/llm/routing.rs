@@ -316,8 +316,11 @@ pub fn defaults_for_provider(provider: &str) -> RoutingConfig {
             }
         }
         "xai" => {
-            let channel: String = "xai/grok-2-latest".into();
-            let worker: String = "xai/grok-2-latest".into();
+            // Grok 4.5 is the flagship (coding + judgment). Channel/branch share
+            // the flagship; cortex/compactor can stay on the same id until a
+            // cheaper tier is profiled for those roles.
+            let channel: String = "xai/grok-4.5".into();
+            let worker: String = "xai/grok-4.5".into();
             RoutingConfig {
                 channel: channel.clone(),
                 branch: channel.clone(),
