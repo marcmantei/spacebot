@@ -2169,6 +2169,13 @@ fn truncate_body(body: &str) -> &str {
 fn with_streaming_enabled(request_body: &serde_json::Value) -> serde_json::Value {
     let mut body = request_body.clone();
     body["stream"] = serde_json::json!(true);
+    // OpenAI-compatible providers (xAI Grok, OpenRouter, …) omit usage from
+    // streaming chunks unless the client asks. Without this, SpaceBot records
+    // request_count with input/output tokens stuck at 0 and FinOps dashboards
+    // under-report Grok spend after the fleet cutover.
+    if body.get("stream_options").is_none() {
+        body["stream_options"] = serde_json::json!({ "include_usage": true });
+    }
     body
 }
 
@@ -4631,6 +4638,14 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn with_streaming_enabled_requests_include_usage() {
+        let body = serde_json::json!({"model": "grok-4.5", "messages": []});
+        let streamed = with_streaming_enabled(&body);
+        assert_eq!(streamed["stream"], true);
+        assert_eq!(streamed["stream_options"]["include_usage"], true);
+    }
+
     fn parse_openai_chat_sse_response_merges_multiline_data_blocks() {
         let sse = concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},\n",
