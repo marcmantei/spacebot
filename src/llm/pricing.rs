@@ -34,6 +34,41 @@ fn lookup_pricing(model_name: &str) -> ModelPricing {
     // Prices verified 2026-07-29 against platform.claude.com pricing docs
     // (Claude Opus 5 confirmed $5/$25 — same tier as Opus 4.5+).
     match model {
+        // xAI Grok — rates from docs.x.ai (2026-08-07, <200k prompt tier).
+        // Longest / most specific prefixes first.
+        m if m.starts_with("grok-4.5") => ModelPricing {
+            input: per_m(2.0),
+            output: per_m(6.0),
+            cached_input: per_m(0.30),
+            cache_write: per_m(2.0),
+        },
+        m if m.starts_with("grok-4.3") => ModelPricing {
+            input: per_m(1.25),
+            output: per_m(2.5),
+            cached_input: per_m(0.20),
+            cache_write: per_m(1.25),
+        },
+        m if m.starts_with("grok-4.20") => ModelPricing {
+            input: per_m(1.25),
+            output: per_m(2.5),
+            cached_input: per_m(0.20),
+            cache_write: per_m(1.25),
+        },
+        m if m.starts_with("grok-build-0.1") => ModelPricing {
+            input: per_m(1.0),
+            output: per_m(2.0),
+            cached_input: per_m(0.20),
+            cache_write: per_m(1.0),
+        },
+        m if m.starts_with("grok-4") || m.starts_with("grok-2") || m.starts_with("grok-3") => {
+            ModelPricing {
+                input: per_m(3.0),
+                output: per_m(15.0),
+                cached_input: per_m(0.75),
+                cache_write: per_m(3.0),
+            }
+        }
+
         m if m.starts_with("claude-fable-5") || m.starts_with("claude-mythos-5") => {
             ModelPricing {
                 input: per_m(10.0),
