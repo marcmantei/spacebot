@@ -564,6 +564,7 @@ pub(super) async fn assign_task(
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 pub(super) struct TaskDiffResponse {
     task_number: i64,
     diff: String,
@@ -573,6 +574,7 @@ pub(super) struct TaskDiffResponse {
 
 /// Get the git diff for a task. Reads `worktree` and `branch` from task
 /// metadata to determine which diff to show.
+#[allow(dead_code)]
 pub(super) async fn task_diff(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
@@ -632,6 +634,7 @@ pub(super) async fn task_diff(
     }))
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 pub(super) struct WorktreeRequest {
     agent_id: String,
@@ -639,6 +642,7 @@ pub(super) struct WorktreeRequest {
     base_branch: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize)]
 pub(super) struct WorktreeResponse {
     task_number: i64,
@@ -649,6 +653,7 @@ pub(super) struct WorktreeResponse {
 
 /// Create a git worktree for a task. Creates a new branch `task/{number}` and
 /// a worktree directory. Stores the path and branch in task metadata.
+#[allow(dead_code)]
 pub(super) async fn create_worktree(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,
@@ -768,6 +773,7 @@ pub(super) async fn create_worktree(
 }
 
 /// Remove a task's git worktree and optionally delete the branch.
+#[allow(dead_code)]
 pub(super) async fn delete_worktree(
     State(state): State<Arc<ApiState>>,
     Path(number): Path<i64>,

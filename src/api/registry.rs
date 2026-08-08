@@ -16,11 +16,13 @@ use crate::registry::sync::{SyncResult, SyncStatus, sync_registry};
 // Query / request types
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 pub(super) struct AgentQuery {
     agent_id: String,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 pub(super) struct RepoListQuery {
     agent_id: String,
@@ -28,12 +30,14 @@ pub(super) struct RepoListQuery {
     enabled_only: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 pub(super) struct RepoQuery {
     agent_id: String,
     full_name: String,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 pub(super) struct UpdateRepoOverridesBody {
     agent_id: String,
@@ -47,17 +51,20 @@ pub(super) struct UpdateRepoOverridesBody {
 // Response types
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Serialize)]
 pub(super) struct RepoListResponse {
     repos: Vec<RegistryRepo>,
     total: usize,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize)]
 pub(super) struct SyncResponse {
     result: SyncResult,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize)]
 pub(super) struct StatusResponse {
     status: SyncStatus,
@@ -68,6 +75,7 @@ pub(super) struct StatusResponse {
 // ---------------------------------------------------------------------------
 
 /// GET /api/registry/repos — list all registry repos for an agent.
+#[allow(dead_code)]
 pub(super) async fn list_registry_repos(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<RepoListQuery>,
@@ -85,6 +93,7 @@ pub(super) async fn list_registry_repos(
 }
 
 /// GET /api/registry/repos/detail — get a single repo by full_name.
+#[allow(dead_code)]
 pub(super) async fn get_registry_repo(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<RepoQuery>,
@@ -102,6 +111,7 @@ pub(super) async fn get_registry_repo(
 }
 
 /// PUT /api/registry/repos/overrides — update per-repo overrides.
+#[allow(dead_code)]
 pub(super) async fn update_repo_overrides(
     State(state): State<Arc<ApiState>>,
     Json(body): Json<UpdateRepoOverridesBody>,
@@ -124,6 +134,7 @@ pub(super) async fn update_repo_overrides(
 }
 
 /// POST /api/registry/sync — trigger a manual sync.
+#[allow(dead_code)]
 pub(super) async fn trigger_sync(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<AgentQuery>,
@@ -162,6 +173,7 @@ pub(super) async fn trigger_sync(
 }
 
 /// GET /api/registry/status — get current sync status.
+#[allow(dead_code)]
 pub(super) async fn registry_status(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<AgentQuery>,
@@ -179,6 +191,7 @@ pub(super) async fn registry_status(
 // GitHub Issues integration
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 pub(super) struct IssuesQuery {
     agent_id: String,
@@ -190,13 +203,16 @@ pub(super) struct IssuesQuery {
     state: String,
 }
 
+#[allow(dead_code)]
 fn default_issues_limit() -> usize {
     50
 }
+#[allow(dead_code)]
 fn default_issues_state() -> String {
     "open".to_string()
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone)]
 pub(super) struct GitHubIssue {
     pub number: i64,
@@ -214,6 +230,7 @@ pub(super) struct GitHubIssue {
     pub updated_at: String,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize)]
 pub(super) struct IssuesResponse {
     issues: Vec<GitHubIssue>,
@@ -222,6 +239,7 @@ pub(super) struct IssuesResponse {
 
 /// GET /api/registry/issues — fetch GitHub issues from all registry repos.
 /// Uses the `gh` CLI to query GitHub.
+#[allow(dead_code)]
 pub(super) async fn list_registry_issues(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<IssuesQuery>,
