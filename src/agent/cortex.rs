@@ -1778,6 +1778,18 @@ pub fn spawn_cortex_loop(deps: AgentDeps, logger: CortexLogger) -> tokio::task::
         drop(prompt_engine);
 
         let cortex = Cortex::new(deps.clone(), system_prompt);
+
+        // Reap orphaned per-worker workspaces left by crashes or retained
+        // failures (issue #224), keeping recent ones for forensics. Best-effort.
+        {
+            let shared_workspace = deps.runtime_config.workspace_dir.clone();
+            if let Err(error) =
+                crate::agent::worker_workspace::reap_orphaned(&shared_workspace).await
+            {
+                tracing::warn!(%error, "failed to reap orphaned worker workspaces on startup");
+            }
+        }
+
         let mut event_rx = deps.event_tx.subscribe();
         let mut memory_event_rx = deps.memory_event_tx.subscribe();
         let mut tool_output_rx = deps.tool_output_tx.subscribe();

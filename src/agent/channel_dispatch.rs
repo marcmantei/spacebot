@@ -636,6 +636,43 @@ pub async fn spawn_worker_from_state(
     result
 }
 
+/// Provision and attach a per-worker isolated workspace (issue #224).
+///
+/// Gives the worker its own `git worktree` per repo in `shared_workspace`, so
+/// concurrent workers can't see or clobber each other's edits. Provisioning is
+/// best-effort: on failure the worker is returned unchanged and falls back to
+/// the shared workspace, so a provisioning hiccup never blocks dispatch.
+///
+/// # Completeness contract (issue #224, finding [3])
+///
+/// A successful `provision(..)` does **not** guarantee every repo was isolated —
+/// per-repo failures are logged and skipped rather than made fatal. The returned
+/// [`WorkerWorkspace`](crate::agent::worker_workspace::WorkerWorkspace) carries
+/// an explicit [`Isolation`](crate::agent::worker_workspace::Isolation) signal
+/// (read via `.isolation()`) recording whether isolation was *complete*,
+/// *partial*, or *absent*. We attach the workspace regardless so the worker
+/// still benefits from whatever isolation was achieved; the worker's
+/// `tool_workspace` selection then consults that signal and refuses to
+/// *silently* fall back to the shared checkout when isolation was incomplete
+/// (finding [1]).
+async fn attach_isolated_workspace(worker: Worker, shared_workspace: &std::path::Path) -> Worker {
+    match crate::agent::worker_workspace::WorkerWorkspace::provision(shared_workspace, worker.id)
+        .await
+    {
+        Ok(workspace) => worker.with_isolated_workspace(workspace),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                error_debug = ?error,
+                worker_id = %worker.id,
+                shared_workspace = %shared_workspace.display(),
+                "failed to provision isolated workspace — worker will use shared workspace"
+            );
+            worker
+        }
+    }
+}
+
 /// Inner implementation of worker spawning, separated so the caller can
 /// handle task reservation cleanup in a single place.
 async fn spawn_worker_inner(
@@ -763,6 +800,13 @@ async fn spawn_worker_inner(
         .resolve_model("worker")
         .map(String::from);
 
+    // Provision a per-worker isolated workspace (issue #224): each worker
+    // gets its own `git worktree` per repo so concurrent workers can't see or
+    // clobber each other's edits. Best-effort — if provisioning fails, the
+    // worker falls back to the shared workspace with a warning rather than
+    // failing dispatch.
+    let shared_workspace = state.deps.runtime_config.workspace_dir.clone();
+
     let worker = if interactive {
         let (worker, input_tx, inject_tx) = Worker::new_interactive(
             Some(state.channel_id.clone()),
@@ -778,6 +822,7 @@ async fn spawn_worker_inner(
             worker_context.wiki_write,
             worker_model_override,
         );
+        let worker = attach_isolated_workspace(worker, &shared_workspace).await;
         let worker_id = worker.id;
         state
             .worker_inputs
@@ -805,6 +850,7 @@ async fn spawn_worker_inner(
             worker_context.wiki_write,
             worker_model_override,
         );
+        let worker = attach_isolated_workspace(worker, &shared_workspace).await;
         state
             .worker_injections
             .write()

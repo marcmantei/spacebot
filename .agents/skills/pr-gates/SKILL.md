@@ -29,6 +29,31 @@ When touching worker lifecycle, cancellation, retries, state transitions, or cac
 - Run targeted tests in addition to broad gate runs.
 - Capture the exact command proving the behavior.
 
+## Commit Hygiene — Never Sweep Sibling Edits (issue #224)
+
+Workers now run in an isolated per-worker `git worktree` (see
+`src/agent/worker_workspace.rs`), but keep these rules as a second layer so a
+commit can never contain files this worker did not touch:
+
+- Stage **explicit paths** you changed: `git add <path> [<path> ...]`. Never
+  `git add -A` or `git add .` — a blind sweep can pick up unrelated content.
+- Verify a **clean, intentional** stage before committing: run
+  `git status --porcelain` and confirm every staged path is one you edited.
+- If the working tree is unexpectedly dirty at handout (files you did not
+  create), stop and investigate rather than committing over them.
+
+Anti-pattern (what caused #211/#218/#219):
+
+```sh
+# BAD — sweeps up whatever else is dirty in the tree, including sibling edits
+git add -A && git commit -m "..."
+
+# GOOD — stage only what you changed, then verify before committing
+git add src/foo.rs src/bar.rs
+git status --porcelain   # confirm every staged path is yours
+git commit -m "..."
+```
+
 ## Migration Safety
 
 - Never edit an existing file in `migrations/`.

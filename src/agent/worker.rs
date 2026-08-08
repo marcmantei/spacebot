@@ -285,6 +285,12 @@ pub struct Worker {
     /// loop reads it at each iteration and short-circuits to
     /// `WorkerOutcome::Blocked` when populated.
     pub blocked_signal: BlockSignal,
+    /// Per-worker isolated workspace (issue #224). When set, the worker's
+    /// shell and file tools operate in this directory — its own `git worktree`
+    /// per repo — instead of the shared `workspace_dir`, so concurrent workers
+    /// can't see or clobber each other's edits. Released on successful
+    /// completion; retained for forensics (and reaped later) on failure.
+    pub isolated_workspace: Option<crate::agent::worker_workspace::WorkerWorkspace>,
 }
 
 impl Worker {
@@ -350,6 +356,7 @@ impl Worker {
                 worker_wall_clock_timeout_secs,
                 segments_run: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 blocked_signal: new_block_signal(),
+                isolated_workspace: None,
             },
             inject_tx,
         )
@@ -430,6 +437,77 @@ impl Worker {
         );
 
         (worker, input_tx, inject_tx)
+    }
+
+    /// Attach a per-worker isolated workspace (issue #224).
+    ///
+    /// When set, the worker's shell and file tools operate in this directory
+    /// instead of the shared `workspace_dir`, giving concurrent workers their
+    /// own `git worktree` per repo. Consumed builder-style so it reads
+    /// naturally at the call site.
+    pub fn with_isolated_workspace(
+        mut self,
+        workspace: crate::agent::worker_workspace::WorkerWorkspace,
+    ) -> Self {
+        self.isolated_workspace = Some(workspace);
+        self
+    }
+
+    /// The base directory the worker's tools should use: the isolated
+    /// workspace when one was provisioned, otherwise the shared workspace.
+    ///
+    /// # Non-recoverable degradation guard (issue #224, finding [1])
+    ///
+    /// When an isolated workspace was provisioned we must not *silently* fall
+    /// back to the shared checkout — that would re-introduce the exact
+    /// cross-worker contamination race #224 exists to prevent. We consult the
+    /// workspace's [`Isolation`](crate::agent::worker_workspace::Isolation)
+    /// completeness signal (finding [3]) to tell apart:
+    ///   - **complete isolation** (every repo isolated, or the degenerate
+    ///     no-repo case): safe to use the isolated root, or safe to fall back to
+    ///     the shared workspace when the isolated root is empty because there was
+    ///     genuinely nothing to isolate.
+    ///   - **incomplete isolation** (repos existed but some/all failed): a
+    ///     `debug_assert!` trips in debug builds because this is a programmer- or
+    ///     environment-level fault the provisioning path should have surfaced;
+    ///     in release builds we log at `error` (not `warn`) so the loss of
+    ///     isolation is loud and greppable rather than silent, then fall back.
+    fn tool_workspace(&self) -> PathBuf {
+        match &self.isolated_workspace {
+            Some(ws) if ws.has_worktrees() => ws.root().to_path_buf(),
+            Some(ws) => {
+                // A workspace was provisioned but isolated no repos. This is
+                // only safe when there was genuinely nothing to isolate
+                // (`Isolation::Fully` over zero repos). If repos existed and
+                // none isolated, falling back to the shared workspace silently
+                // degrades — treat that as non-recoverable in debug and loud in
+                // release. See the guard doc above.
+                let isolation = ws.isolation();
+                debug_assert!(
+                    isolation.is_complete(),
+                    "isolated workspace provisioned with no worktrees despite \
+                     repos being present ({isolation:?}) — silent fallback to the \
+                     shared checkout would re-open issue #224"
+                );
+                if !isolation.is_complete() {
+                    tracing::error!(
+                        worker_id = %self.id,
+                        ?isolation,
+                        "isolated workspace has no worktrees but repos were present — \
+                         isolation FAILED; falling back to shared workspace (this can \
+                         re-open the #224 contamination race)"
+                    );
+                } else {
+                    tracing::warn!(
+                        worker_id = %self.id,
+                        "isolated workspace has no worktrees (nothing to isolate) — \
+                         falling back to shared workspace"
+                    );
+                }
+                self.deps.runtime_config.workspace_dir.clone()
+            }
+            None => self.deps.runtime_config.workspace_dir.clone(),
+        }
     }
 
     /// Resume an interactive worker that was idle at shutdown.
@@ -592,6 +670,11 @@ impl Worker {
             .clone()
             .with_tool_call_registry(tool_call_registry.clone());
 
+        // Per-worker isolated workspace (issue #224): when a worktree was
+        // provisioned, the shell/file tools operate there so concurrent
+        // workers can't clobber each other's edits.
+        let tool_workspace = self.tool_workspace();
+
         // Create per-worker ToolServer with task tools
         let worker_tool_server = crate::tools::create_worker_tool_server(
             self.deps.agent_id.clone(),
@@ -604,7 +687,7 @@ impl Worker {
             self.browser_config.clone(),
             self.screenshot_dir.clone(),
             self.brave_search_key.clone(),
-            self.deps.runtime_config.workspace_dir.clone(),
+            tool_workspace,
             self.deps.sandbox.clone(),
             mcp_tools,
             self.deps.runtime_config.clone(),
@@ -1097,6 +1180,16 @@ impl Worker {
         }
 
         tracing::info!(worker_id = %self.id, "worker completed");
+        // Successful completion: release the isolated workspace (remove its
+        // worktrees). On error/timeout paths we deliberately skip this so the
+        // workspace is retained for forensics; the startup reaper bounds it to
+        // MAX_RETAINED_WORKSPACES (by mtime), so retained failures can't
+        // accumulate unbounded across restarts.
+        if let Some(workspace) = self.isolated_workspace.take()
+            && let Err(error) = workspace.release().await
+        {
+            tracing::warn!(%error, worker_id = %self.id, "failed to release isolated workspace");
+        }
         if hit_max_segments {
             Ok(WorkerOutcome::Partial {
                 result,
